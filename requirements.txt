@@ -1,0 +1,5 @@
+Flask
+requests
+gpxpy
+numpy
+gunicorn  # Render gibi platformlar için bir WSGI sunucusu
