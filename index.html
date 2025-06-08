@@ -44,7 +44,6 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import json
 
-# Python fonksiyonlarının tamamı
 SEGMENT_DISTANCE_METERS = 50.0
 OUTLIER_THRESHOLD_MULTIPLIER = 1.5
 
@@ -245,17 +244,25 @@ def main_analysis_runner(gpx_string):
 
             function populateActivitySelector(activitiesToDisplay) {
                 activitySelector.innerHTML = '<option value="">Analiz için bir aktivite seçin...</option>';
-                if (activitiesToDisplay.length > 0) {
-                    activitiesToDisplay.forEach(act => {
+                let filteredCount = 0;
+                
+                activitiesToDisplay.forEach(act => {
+                    const isRunOrHike = act.type === 'Run' || act.type === 'TrailRun' || act.type === 'Hike';
+                    const isLongEnough = act.distance >= 20000;
+                    if(isRunOrHike && isLongEnough) {
                         const option = document.createElement('option');
                         option.value = act.id;
                         option.dataset.name = act.name.toLowerCase();
                         option.textContent = `[${act.type}] ${act.name} - ${(act.distance / 1000).toFixed(1)} km`;
                         activitySelector.appendChild(option);
-                    });
-                    statusMessage.textContent = `${activitiesToDisplay.length} aktivite bulundu. Lütfen birini seçin.`;
+                        filteredCount++;
+                    }
+                });
+                
+                if(filteredCount > 0){
+                    statusMessage.textContent = `${filteredCount} aktivite bulundu. Lütfen birini seçin.`;
                 } else {
-                    statusMessage.textContent = "Arama kriterlerine uygun aktivite bulunamadı.";
+                     statusMessage.textContent = "Arama/filtre kriterlerine uygun aktivite bulunamadı.";
                 }
             }
 
@@ -293,7 +300,7 @@ def main_analysis_runner(gpx_string):
                 if (token) {
                     const activities = await fetchAndCacheActivities(token);
                     if (activities) {
-                        allActivities = activities.filter(act => (act.type === 'Run' || act.type === 'TrailRun' || act.type === 'Hike') && act.distance >= 20000);
+                        allActivities = activities;
                         populateActivitySelector(allActivities);
                         alert("Aktivite listesi başarıyla güncellendi!");
                     }
@@ -306,6 +313,7 @@ def main_analysis_runner(gpx_string):
                 refreshButton.style.display = 'inline-block';
                 let activitiesFromSource = null;
                 const cachedActivities = localStorage.getItem('strava_activities_cache');
+                
                 if (cachedActivities) {
                     statusMessage.textContent = "Önbellekten aktiviteler yükleniyor...";
                     console.log("Loading activities from cache.");
@@ -314,14 +322,15 @@ def main_analysis_runner(gpx_string):
                     console.log("Cache is empty. Fetching from Strava.");
                     activitiesFromSource = await fetchAndCacheActivities(token);
                 }
+
                 if(activitiesFromSource) {
-                    allActivities = activitiesFromSource.filter(act => (act.type === 'Run' || act.type === 'TrailRun' || act.type === 'Hike') && act.distance >= 20000);
-                    if (allActivities.length > 0) {
-                        populateActivitySelector(allActivities);
+                    allActivities = activitiesFromSource;
+                    populateActivitySelector(allActivities);
+                    if (activitySelector.options.length > 1) {
                         activitySelector.style.display = 'block';
                         searchBox.style.display = 'block';
                     } else {
-                        statusMessage.textContent = "Uygun aktivite bulunamadı. Listeyi yenilemeyi deneyin.";
+                         statusMessage.textContent = "20km üzerinde uygun bir koşu veya yürüyüş aktivitesi bulunamadı.";
                     }
                 }
             } else {
@@ -343,11 +352,14 @@ def main_analysis_runner(gpx_string):
                     const streamResponse = await fetch(`/get_gpx/${activityId}`, { headers: { 'Authorization': `Bearer ${token}` } });
                     const streamData = await streamResponse.json();
                     if(streamData.message || streamData.error) { throw new Error(streamData.message || streamData.error); }
+                    
                     const convertFunc = pyodide.globals.get('convert_stream_to_gpx');
                     const gpxString = convertFunc(JSON.stringify(streamData), activityName);
+                    
                     const analysisFunc = pyodide.globals.get('main_analysis_runner');
                     const plotlyJson = analysisFunc(gpxString);
                     const figData = JSON.parse(plotlyJson);
+                    
                     if (figData.error) {
                         throw new Error(figData.error);
                     } else {
