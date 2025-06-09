@@ -26,13 +26,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Analizi</h1>
+        <h1>GPX & Strava Performans Analizi v2</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
         <div class="controls-section">
             <button id="strava-login-button" class="custom-button">Strava ile Giriş Yap</button>
             
-            <!-- DEĞİŞİKLİK: Arayüz güncellendi -->
             <div id="strava-controls" style="display: none;">
                 <button id="load-activities-button" class="custom-button">Aktiviteleri Yükle / Yenile</button>
                 <span>Analiz için bir antrenman seçin:</span>
@@ -66,7 +65,9 @@ import json
 
 SEGMENT_DISTANCE_METERS = 50.0
 OUTLIER_THRESHOLD_MULTIPLIER = 1.5
-MOVING_AVERAGE_WINDOW = 10 
+MOVING_AVERAGE_WINDOW = 10
+# Eşik değeri geri geldi, yumuşatılmış veri üzerinde kullanılacak.
+ELEVATION_THRESHOLD = 1.0
 
 def format_pace_from_seconds(seconds_per_km):
     if seconds_per_km is None or np.isnan(seconds_per_km) or seconds_per_km <= 0: return "N/A"
@@ -86,6 +87,19 @@ def moving_average(data, window_size):
     padding = window_size - 1
     padded_data = np.pad(data, (padding // 2, padding - padding // 2), mode='edge')
     return np.convolve(padded_data, np.ones(window_size)/window_size, mode='valid')
+
+# Kendi eşik değerli fonksiyonumuz geri geldi.
+def calculate_gain_loss_with_threshold(points, threshold):
+    uphill, downhill = 0.0, 0.0
+    for i in range(1, len(points)):
+        p1, p2 = points[i-1], points[i]
+        if p1.elevation is not None and p2.elevation is not None:
+            elevation_change = p2.elevation - p1.elevation
+            if elevation_change > threshold:
+                uphill += elevation_change
+            elif elevation_change < -threshold:
+                downhill += abs(elevation_change)
+    return uphill, downhill
 
 def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     segments_data = []
@@ -121,9 +135,13 @@ def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2))
     outlier_mask = np.ones(len(all_slopes), dtype=bool); outlier_mask[kept_indices] = False
     outlier_indices = np.where(outlier_mask)[0]
+    
+    # Eşik değerli fonksiyonumuz, yumuşatılmış veri üzerinde daha doğru sonuç verecek.
+    uphill, downhill = calculate_gain_loss_with_threshold(gpx_points, ELEVATION_THRESHOLD)
+    
+    # Mesafe hesabı için geçici segment
     temp_gpx_seg = gpxpy.gpx.GPXTrackSegment(points=gpx_points)
     total_dist_km = temp_gpx_seg.length_3d() / 1000
-    uphill, downhill = temp_gpx_seg.get_uphill_downhill()
     moving_data = temp_gpx_seg.get_moving_data()
     actual_avg_pace_sec = moving_data.moving_time / (moving_data.moving_distance / 1000) if moving_data and moving_data.moving_distance > 0 else 0
     predicted_avg_pace_sec = np.mean(final_poly(all_slopes)) if len(all_slopes) > 0 else 0
@@ -187,18 +205,20 @@ def run_analysis_from_gpx_string(gpx_string):
         gpx = gpxpy.parse(gpx_string)
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
-
-    # DÜZELTME: 'remove_extrems' -> 'remove_extremes' olarak düzeltildi.
+    
+    # Hibrit Metod Adım 1: Veriyi yumuşat.
     if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
         gpx.smooth(vertical=True, remove_extremes=True)
 
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
-    gpx_track = gpxpy.gpx.GPXTrack(); gpx_segment = gpxpy.gpx.GPXTrackSegment(all_points); gpx_track.segments.append(gpx_segment)
-    total_distance = gpx_segment.length_3d()
+    
+    # Hibrit Metod Adım 2: Analizi yumuşatılmış veriyle yap.
+    total_distance = gpxpy.gpx.GPXTrackSegment(all_points).length_3d()
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
+    
     split_distance = total_distance / 2
     cumulative_distance, split_index = 0, -1
     for i in range(1, len(all_points)):
@@ -207,10 +227,13 @@ def run_analysis_from_gpx_string(gpx_string):
         if cumulative_distance >= split_distance:
             split_index = i; break
     if split_index == -1: return json.dumps({"error": "Parkur bölünemedi."})
+    
     first_half_points = all_points[:split_index]; second_half_points = all_points[split_index:]
     activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
+    
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
+    
     if results1 and results2:
         return create_comparison_dashboard(results1, results2, activity_name)
     else:
@@ -219,7 +242,7 @@ def run_analysis_from_gpx_string(gpx_string):
 
 
     <script>
-        // --- JAVASCRIPT PART WITH CACHING LOGIC ---
+        // --- JAVASCRIPT PART IS UNCHANGED ---
         const loader = document.getElementById('loader');
         const statusMessage = document.getElementById('status-message');
         const dashboardContainer = document.getElementById('dashboard-container');
@@ -229,9 +252,7 @@ def run_analysis_from_gpx_string(gpx_string):
         const stravaControls = document.getElementById('strava-controls');
         const activitySelector = document.getElementById('activity-selector');
         const gpxFileInput = document.getElementById('gpx-file-input');
-        // YENİ: Aktivite yükleme/yenileme butonu
         const loadActivitiesButton = document.getElementById('load-activities-button');
-
         async function fetchWithAuth(url, options = {}) {
             const token = localStorage.getItem('strava_token');
             if (!token) {
@@ -248,18 +269,15 @@ def run_analysis_from_gpx_string(gpx_string):
             if (!response.ok) throw new Error(`API Hatası: ${response.statusText}`);
             return response.json();
         }
-
         function handleLogout() {
             localStorage.removeItem('strava_token');
-            sessionStorage.removeItem('strava_activities'); // Önbelleği de temizle
+            sessionStorage.removeItem('strava_activities');
             stravaControls.style.display = 'none';
             loginButton.style.display = 'inline-block';
             activitySelector.innerHTML = '<option value="">Önce aktiviteleri yükleyin...</option>';
             dashboardContainer.innerHTML = '';
             statusMessage.textContent = "Çıkış yapıldı. Analiz için giriş yapın veya GPX dosyası yükleyin.";
         }
-        
-        // YENİ: Aktivite listesini alıp dropdown'ı dolduran ayrı fonksiyon
         function populateActivitySelector(activities) {
             activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
             if (activities.length === 0) {
@@ -275,12 +293,9 @@ def run_analysis_from_gpx_string(gpx_string):
                 activitySelector.appendChild(option);
             });
         }
-
         function setupLoggedInUI() {
             loginButton.style.display = 'none';
             stravaControls.style.display = 'block';
-            
-            // YENİ: Önbelleği kontrol et
             const cachedActivities = sessionStorage.getItem('strava_activities');
             if (cachedActivities) {
                 console.log("Aktiviteler önbellekten yüklendi.");
@@ -291,7 +306,6 @@ def run_analysis_from_gpx_string(gpx_string):
                 statusMessage.textContent = "Hazır. Analiz için Strava aktivitelerinizi yükleyin.";
             }
         }
-
         async function loadTrainingRuns() {
             statusMessage.textContent = "Strava aktiviteleri yükleniyor...";
             loader.style.display = 'block';
@@ -301,9 +315,7 @@ def run_analysis_from_gpx_string(gpx_string):
                     (act.type === 'Run' || act.type === 'TrailRun') && act.distance >= 15000
                 );
                 filteredActivities.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
-
                 populateActivitySelector(filteredActivities);
-                // YENİ: Başarılı çekme sonrası önbelleğe kaydet
                 sessionStorage.setItem('strava_activities', JSON.stringify(filteredActivities));
                 statusMessage.textContent = "Aktivite listesi başarıyla yüklendi ve yenilendi.";
             } catch (error) {
@@ -313,7 +325,6 @@ def run_analysis_from_gpx_string(gpx_string):
                 loader.style.display = 'none';
             }
         }
-        
         async function analyzeSelectedActivity() {
             const selectedOption = activitySelector.options[activitySelector.selectedIndex];
             const activityId = selectedOption.value;
@@ -371,11 +382,10 @@ def run_analysis_from_gpx_string(gpx_string):
                 const pythonCode = document.getElementById('python-code').textContent;
                 pyodide.runPython(pythonCode);
                 console.log("Pyodide ve kütüphaneler hazır.");
-                // Event Listeners
                 loginButton.addEventListener('click', () => { window.location.href = '/login'; });
                 logoutButton.addEventListener('click', handleLogout);
                 activitySelector.addEventListener('change', analyzeSelectedActivity);
-                loadActivitiesButton.addEventListener('click', loadTrainingRuns); // YENİ
+                loadActivitiesButton.addEventListener('click', loadTrainingRuns);
                 gpxFileInput.addEventListener('change', (event) => {
                     const file = event.target.files[0];
                     if (!file) return;
