@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPX & Strava Performans Analizi v2</title>
+    <title>GPX & Strava Performans Analizi v3</title>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <style>
@@ -26,7 +26,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Analizi v2</h1>
+        <h1>GPX & Strava Performans Analizi v3</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
         <div class="controls-section">
@@ -53,7 +53,6 @@
         <div id="dashboard-container"></div>
     </div>
 
-    <!-- Python kodu, önceki çalışan versiyon ile aynı -->
     <script type="text/python" id="python-code">
 import gpxpy
 import gpxpy.gpx
@@ -61,7 +60,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, timezone
-import json
+import json # Make sure json is imported
 
 SEGMENT_DISTANCE_METERS = 50.0
 OUTLIER_THRESHOLD_MULTIPLIER = 1.5
@@ -178,21 +177,30 @@ def create_comparison_dashboard(res1, res2, gpx_name):
     fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", height=total_height, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig.to_json()
 
-def convert_strava_stream_to_gpx(stream_data, activity_name, start_time_iso):
+# --- CORRECTED PYTHON FUNCTION ---
+def convert_strava_stream_to_gpx(stream_data_json, activity_name, start_time_iso):
+    # Parse the JSON string received from JavaScript into a Python dictionary
+    stream_data = json.loads(stream_data_json)
+
     gpx = gpxpy.gpx.GPX()
     gpx_track = gpxpy.gpx.GPXTrack(name=activity_name)
     gpx.tracks.append(gpx_track)
     gpx_segment = gpxpy.gpx.GPXTrackSegment()
     gpx_track.segments.append(gpx_segment)
+    
+    # Now, .get() will work because stream_data is a real Python dict
     time_data = stream_data.get('time', {}).get('data', [])
     latlng_data = stream_data.get('latlng', {}).get('data', [])
     altitude_data = stream_data.get('altitude', {}).get('data', [])
+    
     start_time = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
+    
     for i in range(len(latlng_data)):
         point_time = start_time + timedelta(seconds=time_data[i])
         point = gpxpy.gpx.GPXTrackPoint(latitude=latlng_data[i][0], longitude=latlng_data[i][1],
             elevation=altitude_data[i] if altitude_data else None, time=point_time)
         gpx_segment.points.append(point)
+        
     return gpx.to_xml()
 
 def run_analysis_from_gpx_string(gpx_string):
@@ -250,7 +258,6 @@ def run_analysis_from_gpx_string(gpx_string):
                 handleLogout();
                 throw new Error("Giriş yapılmamış.");
             }
-            // DEĞİŞİKLİK: Sunucu 'Bearer <token>' formatını bekliyor.
             const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers };
             const response = await fetch(url, { ...options, headers });
             if (response.status === 401) {
@@ -280,16 +287,11 @@ def run_analysis_from_gpx_string(gpx_string):
 
         async function loadTrainingRuns() {
             try {
-                // DEĞİŞİKLİK: Yeni API endpoint'ini çağırıyoruz: /get_activities
                 const allActivities = await fetchWithAuth('/get_activities');
-                
-                // DEĞİŞİKLİK: Filtrelemeyi sunucu yerine istemcide (burada) yapıyoruz.
                 const filteredActivities = allActivities.filter(act => 
                     (act.type === 'Run' || act.type === 'TrailRun') && act.distance >= 15000
                 );
-                // Aktiviteleri tarihe göre en yeniden eskiye sırala
                 filteredActivities.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
-
 
                 activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
                 if (filteredActivities.length === 0) {
@@ -301,7 +303,7 @@ def run_analysis_from_gpx_string(gpx_string):
                     option.value = act.id;
                     option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
                     option.dataset.name = act.name;
-                    option.dataset.startTime = act.start_date; // Strava'dan gelen UTC zamanı
+                    option.dataset.startTime = act.start_date;
                     activitySelector.appendChild(option);
                 });
                 statusMessage.textContent = "Hazır. Analiz için bir aktivite seçin veya GPX dosyası yükleyin.";
@@ -311,6 +313,7 @@ def run_analysis_from_gpx_string(gpx_string):
             }
         }
         
+        // --- CORRECTED JAVASCRIPT FUNCTION ---
         async function analyzeSelectedActivity() {
             const selectedOption = activitySelector.options[activitySelector.selectedIndex];
             const activityId = selectedOption.value;
@@ -332,15 +335,11 @@ def run_analysis_from_gpx_string(gpx_string):
                 
                 const gpxConverter = pyodide.globals.get('convert_strava_stream_to_gpx');
                 
-                // ---- DEĞİŞİKLİK BURADA ----
-                // Python'a JS nesnesini doğrudan göndermek yerine,
-                // onu bir Map'e dönüştürüyoruz. Bu, Pyodide'ın onu
-                // doğru bir şekilde Python sözlüğüne (dict) çevirmesini garantiler.
-                const streamDataAsMap = new Map(Object.entries(streamData));
-
-                // Python fonksiyonunu güncellenmiş veriyle çağırıyoruz.
-                const gpxString = gpxConverter(streamDataAsMap, activityName, activityStartTime);
-                // ---- DEĞİŞİKLİK SONU ----
+                // Convert the JS object to a JSON string to pass it reliably to Python.
+                const streamDataAsJsonString = JSON.stringify(streamData);
+                
+                // Call the Python function with the JSON string.
+                const gpxString = gpxConverter(streamDataAsJsonString, activityName, activityStartTime);
                 
                 runAnalysis(gpxString);
 
@@ -352,6 +351,7 @@ def run_analysis_from_gpx_string(gpx_string):
                 loader.style.display = 'none';
             }
         }
+
         function runAnalysis(gpxContent) {
             try {
                 const analysisFunc = pyodide.globals.get('run_analysis_from_gpx_string');
