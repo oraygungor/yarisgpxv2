@@ -345,8 +345,10 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
         roadModelBtn.onclick = () => createModelForType(roadRuns, 'Yol');
         trailModelBtn.onclick = () => createModelForType(trailRuns, 'Patika');
         
-        loginButton.onclick = () => {
-            const redirectUri = window.location.href.split('#')[0].split('?')[0]; // Mevcut URL'i temizle
+      loginButton.onclick = () => {
+            // DEĞİŞİKLİK: Kullanıcıyı her zaman ana sayfana yönlendir.
+            const redirectUri = window.location.origin; 
+            
             const authUrl = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&approval_prompt=auto&scope=activity:read_all`;
             window.location.href = authUrl;
         };
