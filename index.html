@@ -1,4 +1,4 @@
-<!-- Dosya Adı: index.html -->
+<!-- Dosya Adı: index.html (YENİ VE AKILLI VERSİYON) -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -34,10 +34,36 @@
         <h1>Strava Analiz ve Simülasyon Araçları</h1>
         <p>Hangi aracı kullanmak istersiniz?</p>
         <div class="button-container">
-            <!-- DİKKAT: Yönlendirme linkleri artık dosya adlarına göre yapılıyor -->
             <a href="/yarissimulasyonu.html" class="button">Yarış Simülatörü</a>
             <a href="/yarisanalizi.html" class="button secondary">Yarış Analizi (Yakında)</a>
         </div>
     </div>
+
+    <script>
+        // Bu script, Strava'dan geri dönüldüğünde token'ı yakalamak içindir.
+        (function() {
+            const hash = window.location.hash;
+            if (hash && hash.includes("access_token")) {
+                const params = new URLSearchParams(hash.substring(1)); // # karakterini kaldır
+                const accessToken = params.get("access_token");
+
+                if (accessToken) {
+                    // Token'ı kaydet
+                    localStorage.setItem('strava_token', accessToken);
+                    
+                    // Kullanıcıyı nereden geldiyse oraya geri yönlendir
+                    const redirectPath = localStorage.getItem('login_redirect_path');
+                    localStorage.removeItem('login_redirect_path'); // Temizle
+                    
+                    if (redirectPath) {
+                        window.location.href = redirectPath;
+                    } else {
+                        // Eğer bir yönlendirme yolu yoksa, URL'i temizleyip burada kal
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    }
+                }
+            }
+        })();
+    </script>
 </body>
 </html>
