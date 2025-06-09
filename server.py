@@ -64,6 +64,7 @@ def callback():
 
 
 # --- API Endpointleri ---
+# server.py içindeki fonksiyon
 
 @app.route('/api/get_activities', methods=['GET'])
 def get_activities():
@@ -83,11 +84,21 @@ def get_activities():
             all_activities.extend(activities)
             page += 1
 
-        runs_with_type = [
-            {'id': act['id'], 'distance': act['distance'], 'sport_type': act.get('sport_type')}
+        # --- DEĞİŞİKLİK BURADA ---
+        # Artık 'name' ve 'start_date' bilgilerini de ekliyoruz.
+        runs_with_details = [
+            {
+                'id': act['id'], 
+                'name': act.get('name', f"Aktivite {act['id']}"), # Aktivite adı yoksa ID'sini kullan
+                'distance': act['distance'], 
+                'sport_type': act.get('sport_type'),
+                'start_date': act.get('start_date') # Başlangıç tarihini ekle
+            }
             for act in all_activities if act.get('sport_type') in ['Run', 'TrailRun', 'VirtualRun']
         ]
-        return jsonify(runs_with_type)
+        return jsonify(runs_with_details)
+        # --- DEĞİŞİKLİK SONU ---
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
