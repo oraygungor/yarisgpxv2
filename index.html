@@ -86,46 +86,58 @@ def moving_average(data, window_size):
     padded_data = np.pad(data, (padding // 2, padding - padding // 2), mode='edge')
     return np.convolve(padded_data, np.ones(window_size)/window_size, mode='valid')
 
-# --- YENİ VE BASİTLEŞTİRİLMİŞ ANALİZ FONKSİYONU ---
-def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
-    segments_data = []
-    # YENİ: Toplam kazanç/kayıp bu döngüde hesaplanacak
-    total_uphill = 0.0
-    total_downhill = 0.0
-
-    if len(gpx_points) < 2: return None
-    segment_start_point, cumulative_distance = gpx_points[0], 0.0
+# YENİ: Farklı segment uzunluklarına göre kazanç/kayıp hesaplayan fonksiyon
+def calculate_elevation_for_segment_length(points, segment_length):
+    uphill, downhill = 0.0, 0.0
+    if len(points) < 2: return uphill, downhill
     
-    for i in range(1, len(gpx_points)):
-        prev_point, current_point = gpx_points[i-1], gpx_points[i]
+    segment_start_point = points[0]
+    cumulative_distance = 0.0
+    
+    for i in range(1, len(points)):
+        prev_point, current_point = points[i-1], points[i]
         delta_distance = current_point.distance_2d(prev_point)
-        if delta_distance is None or delta_distance == 0: continue
+        if delta_distance is None: continue
         
         cumulative_distance += delta_distance
         
         if cumulative_distance >= segment_length:
+            if current_point.elevation is not None and segment_start_point.elevation is not None:
+                elevation_delta = current_point.elevation - segment_start_point.elevation
+                if elevation_delta > 0:
+                    uphill += elevation_delta
+                else:
+                    downhill += abs(elevation_delta)
+            
+            segment_start_point = current_point
+            cumulative_distance = 0.0
+            
+    return uphill, downhill
+
+def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
+    # Ana analiz fonksiyonu artık sadece kendi işine odaklanıyor.
+    segments_data, total_uphill, total_downhill = [], 0.0, 0.0
+    if len(gpx_points) < 2: return None
+    segment_start_point, cumulative_distance = gpx_points[0], 0.0
+    for i in range(1, len(gpx_points)):
+        prev_point, current_point = gpx_points[i-1], gpx_points[i]
+        delta_distance = current_point.distance_2d(prev_point)
+        if delta_distance is None or delta_distance == 0: continue
+        cumulative_distance += delta_distance
+        if cumulative_distance >= segment_length:
             time_delta = current_point.time - segment_start_point.time if current_point.time and segment_start_point.time else None
             elevation_delta = current_point.elevation - segment_start_point.elevation if current_point.elevation and segment_start_point.elevation else 0
-            
-            # YENİ: Toplam kazanç/kaybı segment bazında topla
-            if elevation_delta > 0:
-                total_uphill += elevation_delta
-            else:
-                total_downhill += abs(elevation_delta)
-            
+            if elevation_delta > 0: total_uphill += elevation_delta
+            else: total_downhill += abs(elevation_delta)
             slope = (elevation_delta / cumulative_distance) * 100 if cumulative_distance > 0 else 0
             pace_sec_per_km = (time_delta.total_seconds() / cumulative_distance) * 1000 if time_delta and time_delta.total_seconds() > 0 else 0
-            
             if 120 < pace_sec_per_km < 4000:
                 segments_data.append({'slope': slope, 'pace_sec': pace_sec_per_km})
-                
             segment_start_point, cumulative_distance = current_point, 0.0
-            
     if not segments_data: return None
     analysis_data = {'slopes': [d['slope'] for d in segments_data], 'paces_sec': [d['pace_sec'] for d in segments_data]}
     all_slopes, all_paces = np.array(analysis_data['slopes']), np.array(analysis_data['paces_sec'])
     smoothed_paces_sec = moving_average(all_paces, MOVING_AVERAGE_WINDOW)
-    
     kept_indices = np.arange(len(all_slopes))
     for _ in range(10):
         fit_slopes, fit_paces = all_slopes[kept_indices], all_paces[kept_indices]
@@ -139,26 +151,29 @@ def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2))
     outlier_mask = np.ones(len(all_slopes), dtype=bool); outlier_mask[kept_indices] = False
     outlier_indices = np.where(outlier_mask)[0]
-    
     temp_gpx_seg = gpxpy.gpx.GPXTrackSegment(points=gpx_points)
     total_dist_km = temp_gpx_seg.length_3d() / 1000
     moving_data = temp_gpx_seg.get_moving_data()
     actual_avg_pace_sec = moving_data.moving_time / (moving_data.moving_distance / 1000) if moving_data and moving_data.moving_distance > 0 else 0
     predicted_avg_pace_sec = np.mean(final_poly(all_slopes)) if len(all_slopes) > 0 else 0
-    
     stats_dict = {'Toplam Mesafe': f'{total_dist_km:.2f} km', 'Toplam Yükseklik Kazancı': f'{int(total_uphill)} m', 'Toplam Yükseklik Kaybı': f'{int(total_downhill)} m', 'Gerçek Ortalama Pace': f'{format_pace_from_seconds(actual_avg_pace_sec)}/km', 'Tahmini Ortalama Pace': f'{format_pace_from_seconds(predicted_avg_pace_sec)}/km'}
     return {'poly': final_poly, 'kept_indices': kept_indices, 'outlier_indices': outlier_indices, 'all_slopes': all_slopes, 'all_paces_sec': all_paces, 'smoothed_paces_sec': smoothed_paces_sec, 'stats': stats_dict}
 
-def create_comparison_dashboard(res1, res2, gpx_name):
-    HEADER_HEIGHT, ROW_HEIGHT, MIN_GRAPH_HEIGHT, VERTICAL_PADDING = 40, 30, 450, 120
+# YENİ: Dashboard artık bir de elevasyon karşılaştırma verisi alıyor
+def create_comparison_dashboard(res1, res2, gpx_name, elevation_comparison):
+    HEADER_HEIGHT, ROW_HEIGHT, MIN_GRAPH_HEIGHT, VERTICAL_PADDING = 40, 30, 450, 200 # Padding arttırıldı
     num_stats_rows = len(res1['stats'])
     stats_table_height_px = HEADER_HEIGHT + (num_stats_rows * ROW_HEIGHT)
     prediction_slopes = [-30, -20, -15, -10, -5, 0, 5, 10, 15, 20, 30]
     num_comparison_rows = len(prediction_slopes)
     comparison_table_height_px = HEADER_HEIGHT + (num_comparison_rows * ROW_HEIGHT)
-    total_height = MIN_GRAPH_HEIGHT + stats_table_height_px + comparison_table_height_px + VERTICAL_PADDING
-    dynamic_row_heights = [MIN_GRAPH_HEIGHT / total_height, stats_table_height_px / total_height, comparison_table_height_px / total_height]
-    fig = make_subplots(rows=3, cols=2, specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "table"}, {"type": "table"}], [{"type": "table", "colspan": 2}, None]], row_heights=dynamic_row_heights, vertical_spacing=0.05, subplot_titles=("<b>İlk Yarı Performans Modeli</b>", "<b>İkinci Yarı Performans Modeli</b>"))
+    elevation_table_height_px = HEADER_HEIGHT + (len(elevation_comparison) * ROW_HEIGHT) # Yeni tablonun yüksekliği
+    total_height = MIN_GRAPH_HEIGHT + stats_table_height_px + comparison_table_height_px + elevation_table_height_px + VERTICAL_PADDING
+    
+    # YENİ: 4 satırlı layout
+    dynamic_row_heights = [MIN_GRAPH_HEIGHT / total_height, stats_table_height_px / total_height, comparison_table_height_px / total_height, elevation_table_height_px / total_height]
+    fig = make_subplots(rows=4, cols=2, specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "table"}, {"type": "table"}], [{"type": "table", "colspan": 2}, None], [{"type": "table", "colspan": 2}, None]], row_heights=dynamic_row_heights, vertical_spacing=0.04, subplot_titles=("<b>İlk Yarı Performans Modeli</b>", "<b>İkinci Yarı Performans Modeli</b>"))
+    
     for i, res in enumerate([res1, res2]):
         col = i + 1
         hover_texts = np.array([f"Pace: {format_pace_from_seconds(p)}<br>Eğim: {s:.1f}%" for p, s in zip(res['all_paces_sec'], res['all_slopes'])])
@@ -169,6 +184,7 @@ def create_comparison_dashboard(res1, res2, gpx_name):
         y_smooth = res['poly'](x_smooth)
         fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Pace Modeli', line=dict(color='red', width=3), showlegend=(i==0)), row=1, col=col)
         fig.add_trace(go.Table(header=dict(values=['<b>Metrik</b>', '<b>Değer</b>'], fill_color='royalblue', font=dict(color='white')), cells=dict(values=[list(res['stats'].keys()), list(res['stats'].values())], fill_color='lightcyan', align='left')), row=2, col=col)
+    
     paces1 = [format_pace_from_seconds(res1['poly'](s)) for s in prediction_slopes]; paces2 = [format_pace_from_seconds(res2['poly'](s)) for s in prediction_slopes]
     changes, colors = [], []
     for s in prediction_slopes:
@@ -177,6 +193,13 @@ def create_comparison_dashboard(res1, res2, gpx_name):
         text, color = format_performance_change(change)
         changes.append(text); colors.append(color)
     fig.add_trace(go.Table(header=dict(values=['<b>Eğim</b>', '<b>Pace (İlk Yarı)</b>', '<b>Pace (İkinci Yarı)</b>', '<b>Performans Değişimi</b>'], font=dict(color='white'), fill_color='royalblue'), cells=dict(values=[[f'{s}%' for s in prediction_slopes], paces1, paces2, changes], fill_color=[['lightcyan']*len(changes)]*3 + [colors], align='left')), row=3, col=1)
+    
+    # YENİ: Elevasyon karşılaştırma tablosu
+    fig.add_trace(go.Table(
+        header=dict(values=['<b>Segment Uzunluğu</b>', '<b>Hesaplanan Kazanç</b>', '<b>Hesaplanan Kayıp</b>'], font=dict(color='white'), fill_color='darkslateblue'),
+        cells=dict(values=[[f'{d["length"]} m' for d in elevation_comparison], [f'{int(d["uphill"])} m' for d in elevation_comparison], [f'{int(d["downhill"])} m' for d in elevation_comparison]], fill_color='lavender', align='left')
+    ), row=4, col=1)
+
     model_slope_range = np.linspace(-35, 35, 100)
     model_paces1 = res1['poly'](model_slope_range); model_paces2 = res2['poly'](model_slope_range)
     y_axis_min_pace = min(np.min(model_paces1), np.min(model_paces2)); y_axis_max_pace = max(np.max(model_paces1), np.max(model_paces2))
@@ -207,14 +230,19 @@ def run_analysis_from_gpx_string(gpx_string):
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
 
-    # Artık smoothing veya özel kazanç fonksiyonu yok, her şey tek bir yerde.
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
-    
     total_distance = gpxpy.gpx.GPXTrackSegment(all_points).length_3d()
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
+    
+    # YENİ: Farklı segmentler için elevasyonu hesapla ve sakla
+    elevation_comparison_data = []
+    elevation_test_lengths = [5, 10, 25, 40, 50]
+    for length in elevation_test_lengths:
+        uphill, downhill = calculate_elevation_for_segment_length(all_points, length)
+        elevation_comparison_data.append({'length': length, 'uphill': uphill, 'downhill': downhill})
     
     split_distance = total_distance / 2
     cumulative_distance, split_index = 0, -1
@@ -228,11 +256,13 @@ def run_analysis_from_gpx_string(gpx_string):
     first_half_points = all_points[:split_index]; second_half_points = all_points[split_index:]
     activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
     
+    # Ana analiz, standart 50m ile yapılır.
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     
     if results1 and results2:
-        return create_comparison_dashboard(results1, results2, activity_name)
+        # Dashboard'a elevasyon karşılaştırma verisini de gönder
+        return create_comparison_dashboard(results1, results2, activity_name, elevation_comparison_data)
     else:
         return json.dumps({"error": "Koşunun bir veya iki yarısı için analiz başarısız oldu."})
     </script>
