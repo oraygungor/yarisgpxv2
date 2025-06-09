@@ -26,7 +26,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Analizi</h1>
+        <h1>GPX & Strava Performans Analizi v13</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
         <div class="controls-section">
@@ -244,8 +244,8 @@ def run_analysis_from_gpx_string(gpx_string, source='gpx_file'):
 
     # YENİ: Veri kaynağına göre doğru elevasyon metodunu seç
     if source == 'strava':
-        uphill1, downhill1 = calculate_elevation_by_segment(first_half_points, 40)
-        uphill2, downhill2 = calculate_elevation_by_segment(second_half_points, 40)
+        uphill1, downhill1 = calculate_elevation_by_segment(first_half_points, 35)
+        uphill2, downhill2 = calculate_elevation_by_segment(second_half_points, 35)
     else: # 'gpx_file' veya diğerleri için
         uphill1, downhill1 = calculate_elevation_by_smoothing(first_half_points)
         uphill2, downhill2 = calculate_elevation_by_smoothing(second_half_points)
