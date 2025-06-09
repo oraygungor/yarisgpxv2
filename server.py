@@ -15,6 +15,17 @@ STRAVA_CLIENT_SECRET = os.environ.get('STRAVA_CLIENT_SECRET')
 REDIRECT_URI = os.environ.get('REDIRECT_URI', 'http://localhost:5000/callback')
 
 
+# Bu fonksiyonları @app.route('/') ve @app.route('/login') arasına ekleyebilirsin.
+# Sırası önemli değil, sadece var olmaları yeterli.
+
+@app.route('/simulator')
+def simulator_page():
+    return render_template('yarissimulasyonu.html')
+
+@app.route('/analyzer')
+def analyzer_page():
+    return render_template('yarisanalizi.html')
+
 @app.route('/')
 def index():
     # Projenin ana klasöründeki 'index.html' dosyasını sunar.
