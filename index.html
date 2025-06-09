@@ -33,7 +33,7 @@
             <button id="strava-login-button" class="custom-button">Strava ile Giriş Yap</button>
             
             <div id="strava-controls" style="display: none;">
-                <span>Analiz için bir antrenman seçin:</span>
+                <span>Analiz için bir antrenman seçin (15km+ Koşular):</span>
                 <select id="activity-selector">
                     <option value="">Yükleniyor...</option>
                 </select>
@@ -53,7 +53,7 @@
         <div id="dashboard-container"></div>
     </div>
 
-    <!-- DEĞİŞİKLİK: Python kodunu ayrı ve güvenli bir script etiketine taşıdık -->
+    <!-- Python kodu, önceki çalışan versiyon ile aynı -->
     <script type="text/python" id="python-code">
 import gpxpy
 import gpxpy.gpx
@@ -178,33 +178,21 @@ def create_comparison_dashboard(res1, res2, gpx_name):
     fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", height=total_height, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig.to_json()
 
-# DEĞİŞİKLİK: Fonksiyon artık aktivitenin başlangıç zamanını da alıyor
 def convert_strava_stream_to_gpx(stream_data, activity_name, start_time_iso):
     gpx = gpxpy.gpx.GPX()
     gpx_track = gpxpy.gpx.GPXTrack(name=activity_name)
     gpx.tracks.append(gpx_track)
     gpx_segment = gpxpy.gpx.GPXTrackSegment()
     gpx_track.segments.append(gpx_segment)
-    
     time_data = stream_data.get('time', {}).get('data', [])
     latlng_data = stream_data.get('latlng', {}).get('data', [])
     altitude_data = stream_data.get('altitude', {}).get('data', [])
-    
-    # DEĞİŞİKLİK: Başlangıç zamanını ISO formatından datetime objesine çeviriyoruz
-    # Strava'dan gelen 'Z' (Zulu/UTC) zamanını doğru işlemek için.
     start_time = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
-
     for i in range(len(latlng_data)):
-        # Zaman akışı, başlangıçtan itibaren geçen saniyelerdir.
         point_time = start_time + timedelta(seconds=time_data[i])
-        point = gpxpy.gpx.GPXTrackPoint(
-            latitude=latlng_data[i][0],
-            longitude=latlng_data[i][1],
-            elevation=altitude_data[i] if altitude_data else None,
-            time=point_time
-        )
+        point = gpxpy.gpx.GPXTrackPoint(latitude=latlng_data[i][0], longitude=latlng_data[i][1],
+            elevation=altitude_data[i] if altitude_data else None, time=point_time)
         gpx_segment.points.append(point)
-        
     return gpx.to_xml()
 
 def run_analysis_from_gpx_string(gpx_string):
@@ -212,20 +200,15 @@ def run_analysis_from_gpx_string(gpx_string):
         gpx = gpxpy.parse(gpx_string)
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
-
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
-    # GPX dosyasında zaman bilgisi yoksa analiz yapılamaz.
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
-
     gpx_track = gpxpy.gpx.GPXTrack()
     gpx_segment = gpxpy.gpx.GPXTrackSegment(all_points)
     gpx_track.segments.append(gpx_segment)
     total_distance = gpx_segment.length_3d()
-
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
-
     split_distance = total_distance / 2
     cumulative_distance, split_index = 0, -1
     for i in range(1, len(all_points)):
@@ -235,12 +218,10 @@ def run_analysis_from_gpx_string(gpx_string):
             split_index = i
             break
     if split_index == -1: return json.dumps({"error": "Parkur bölünemedi."})
-    
     first_half_points, second_half_points = all_points[:split_index], all_points[split_index:]
     activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
-
     if results1 and results2:
         return create_comparison_dashboard(results1, results2, activity_name)
     else:
@@ -269,7 +250,8 @@ def run_analysis_from_gpx_string(gpx_string):
                 handleLogout();
                 throw new Error("Giriş yapılmamış.");
             }
-            const headers = { 'Authorization': token, 'Content-Type': 'application/json', ...options.headers };
+            // DEĞİŞİKLİK: Sunucu 'Bearer <token>' formatını bekliyor.
+            const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers };
             const response = await fetch(url, { ...options, headers });
             if (response.status === 401) {
                 handleLogout();
@@ -298,18 +280,28 @@ def run_analysis_from_gpx_string(gpx_string):
 
         async function loadTrainingRuns() {
             try {
-                const activities = await fetchWithAuth('/api/get_training_runs');
+                // DEĞİŞİKLİK: Yeni API endpoint'ini çağırıyoruz: /get_activities
+                const allActivities = await fetchWithAuth('/get_activities');
+                
+                // DEĞİŞİKLİK: Filtrelemeyi sunucu yerine istemcide (burada) yapıyoruz.
+                const filteredActivities = allActivities.filter(act => 
+                    (act.type === 'Run' || act.type === 'TrailRun') && act.distance >= 15000
+                );
+                // Aktiviteleri tarihe göre en yeniden eskiye sırala
+                filteredActivities.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+
+
                 activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
-                if (activities.length === 0) {
-                     activitySelector.innerHTML = '<option value="">Uygun aktivite bulunamadı (15km+).</option>';
+                if (filteredActivities.length === 0) {
+                     activitySelector.innerHTML = '<option value="">Analize uygun koşu bulunamadı (15km+).</option>';
                      return;
                 }
-                activities.forEach(act => {
+                filteredActivities.forEach(act => {
                     const option = document.createElement('option');
                     option.value = act.id;
                     option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
                     option.dataset.name = act.name;
-                    option.dataset.startTime = act.start_date_local; // DEĞİŞİKLİK: Başlangıç zamanını sakla
+                    option.dataset.startTime = act.start_date; // Strava'dan gelen UTC zamanı
                     activitySelector.appendChild(option);
                 });
                 statusMessage.textContent = "Hazır. Analiz için bir aktivite seçin veya GPX dosyası yükleyin.";
@@ -325,24 +317,22 @@ def run_analysis_from_gpx_string(gpx_string):
             if (!activityId) return;
 
             const activityName = selectedOption.dataset.name;
-            const activityStartTime = selectedOption.dataset.startTime; // DEĞİŞİKLİK: Başlangıç zamanını al
+            const activityStartTime = selectedOption.dataset.startTime; 
 
             statusMessage.textContent = `"${activityName}" aktivitesi için veri akışı alınıyor...`;
             loader.style.display = 'block';
             dashboardContainer.innerHTML = '';
             
             try {
-                const streams = await fetchWithAuth('/api/get_activity_streams', {
-                    method: 'POST',
-                    body: JSON.stringify({ activity_ids: [activityId] })
-                });
+                // DEĞİŞİKLİK: Yeni API endpoint'ini çağırıyoruz: /get_gpx/<id>
+                const streamData = await fetchWithAuth(`/get_gpx/${activityId}`);
 
-                if (!streams || streams.length === 0) throw new Error("Aktivite için veri akışı alınamadı.");
+                if (!streamData || Object.keys(streamData).length === 0) throw new Error("Aktivite için veri akışı alınamadı.");
                 
                 statusMessage.textContent = "Veri GPX formatına dönüştürülüyor ve analiz ediliyor...";
                 
                 const gpxConverter = pyodide.globals.get('convert_strava_stream_to_gpx');
-                const gpxString = gpxConverter(streams[0], activityName, activityStartTime); // DEĞİŞİKLİK: Başlangıç zamanını Python'a gönder
+                const gpxString = gpxConverter(streamData, activityName, activityStartTime);
                 
                 runAnalysis(gpxString);
 
@@ -386,7 +376,6 @@ def run_analysis_from_gpx_string(gpx_string):
                 const micropip = pyodide.pyimport("micropip");
                 await micropip.install(['gpxpy', 'plotly']);
                 
-                // DEĞİŞİKLİK: Python kodunu ID'si ile DOM'dan alıyoruz.
                 const pythonCode = document.getElementById('python-code').textContent;
                 pyodide.runPython(pythonCode);
                 console.log("Pyodide ve kütüphaneler hazır.");
