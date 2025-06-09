@@ -26,7 +26,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Analizi v2</h1>
+        <h1>GPX & Strava Performans Analizi</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
         <div class="controls-section">
@@ -65,9 +65,7 @@ import json
 
 SEGMENT_DISTANCE_METERS = 50.0
 OUTLIER_THRESHOLD_MULTIPLIER = 1.5
-MOVING_AVERAGE_WINDOW = 10
-# Eşik değeri geri geldi, yumuşatılmış veri üzerinde kullanılacak.
-ELEVATION_THRESHOLD = 1.0
+MOVING_AVERAGE_WINDOW = 10 
 
 def format_pace_from_seconds(seconds_per_km):
     if seconds_per_km is None or np.isnan(seconds_per_km) or seconds_per_km <= 0: return "N/A"
@@ -88,40 +86,46 @@ def moving_average(data, window_size):
     padded_data = np.pad(data, (padding // 2, padding - padding // 2), mode='edge')
     return np.convolve(padded_data, np.ones(window_size)/window_size, mode='valid')
 
-# Kendi eşik değerli fonksiyonumuz geri geldi.
-def calculate_gain_loss_with_threshold(points, threshold):
-    uphill, downhill = 0.0, 0.0
-    for i in range(1, len(points)):
-        p1, p2 = points[i-1], points[i]
-        if p1.elevation is not None and p2.elevation is not None:
-            elevation_change = p2.elevation - p1.elevation
-            if elevation_change > threshold:
-                uphill += elevation_change
-            elif elevation_change < -threshold:
-                downhill += abs(elevation_change)
-    return uphill, downhill
-
+# --- YENİ VE BASİTLEŞTİRİLMİŞ ANALİZ FONKSİYONU ---
 def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     segments_data = []
+    # YENİ: Toplam kazanç/kayıp bu döngüde hesaplanacak
+    total_uphill = 0.0
+    total_downhill = 0.0
+
     if len(gpx_points) < 2: return None
     segment_start_point, cumulative_distance = gpx_points[0], 0.0
+    
     for i in range(1, len(gpx_points)):
         prev_point, current_point = gpx_points[i-1], gpx_points[i]
         delta_distance = current_point.distance_2d(prev_point)
         if delta_distance is None or delta_distance == 0: continue
+        
         cumulative_distance += delta_distance
+        
         if cumulative_distance >= segment_length:
             time_delta = current_point.time - segment_start_point.time if current_point.time and segment_start_point.time else None
             elevation_delta = current_point.elevation - segment_start_point.elevation if current_point.elevation and segment_start_point.elevation else 0
+            
+            # YENİ: Toplam kazanç/kaybı segment bazında topla
+            if elevation_delta > 0:
+                total_uphill += elevation_delta
+            else:
+                total_downhill += abs(elevation_delta)
+            
             slope = (elevation_delta / cumulative_distance) * 100 if cumulative_distance > 0 else 0
             pace_sec_per_km = (time_delta.total_seconds() / cumulative_distance) * 1000 if time_delta and time_delta.total_seconds() > 0 else 0
+            
             if 120 < pace_sec_per_km < 4000:
                 segments_data.append({'slope': slope, 'pace_sec': pace_sec_per_km})
+                
             segment_start_point, cumulative_distance = current_point, 0.0
+            
     if not segments_data: return None
     analysis_data = {'slopes': [d['slope'] for d in segments_data], 'paces_sec': [d['pace_sec'] for d in segments_data]}
     all_slopes, all_paces = np.array(analysis_data['slopes']), np.array(analysis_data['paces_sec'])
     smoothed_paces_sec = moving_average(all_paces, MOVING_AVERAGE_WINDOW)
+    
     kept_indices = np.arange(len(all_slopes))
     for _ in range(10):
         fit_slopes, fit_paces = all_slopes[kept_indices], all_paces[kept_indices]
@@ -136,16 +140,13 @@ def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     outlier_mask = np.ones(len(all_slopes), dtype=bool); outlier_mask[kept_indices] = False
     outlier_indices = np.where(outlier_mask)[0]
     
-    # Eşik değerli fonksiyonumuz, yumuşatılmış veri üzerinde daha doğru sonuç verecek.
-    uphill, downhill = calculate_gain_loss_with_threshold(gpx_points, ELEVATION_THRESHOLD)
-    
-    # Mesafe hesabı için geçici segment
     temp_gpx_seg = gpxpy.gpx.GPXTrackSegment(points=gpx_points)
     total_dist_km = temp_gpx_seg.length_3d() / 1000
     moving_data = temp_gpx_seg.get_moving_data()
     actual_avg_pace_sec = moving_data.moving_time / (moving_data.moving_distance / 1000) if moving_data and moving_data.moving_distance > 0 else 0
     predicted_avg_pace_sec = np.mean(final_poly(all_slopes)) if len(all_slopes) > 0 else 0
-    stats_dict = {'Toplam Mesafe': f'{total_dist_km:.2f} km', 'Toplam Yükseklik Kazancı': f'{int(uphill)} m', 'Toplam Yükseklik Kaybı': f'{int(downhill)} m', 'Gerçek Ortalama Pace': f'{format_pace_from_seconds(actual_avg_pace_sec)}/km', 'Tahmini Ortalama Pace': f'{format_pace_from_seconds(predicted_avg_pace_sec)}/km'}
+    
+    stats_dict = {'Toplam Mesafe': f'{total_dist_km:.2f} km', 'Toplam Yükseklik Kazancı': f'{int(total_uphill)} m', 'Toplam Yükseklik Kaybı': f'{int(total_downhill)} m', 'Gerçek Ortalama Pace': f'{format_pace_from_seconds(actual_avg_pace_sec)}/km', 'Tahmini Ortalama Pace': f'{format_pace_from_seconds(predicted_avg_pace_sec)}/km'}
     return {'poly': final_poly, 'kept_indices': kept_indices, 'outlier_indices': outlier_indices, 'all_slopes': all_slopes, 'all_paces_sec': all_paces, 'smoothed_paces_sec': smoothed_paces_sec, 'stats': stats_dict}
 
 def create_comparison_dashboard(res1, res2, gpx_name):
@@ -205,16 +206,12 @@ def run_analysis_from_gpx_string(gpx_string):
         gpx = gpxpy.parse(gpx_string)
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
-    
-    # Hibrit Metod Adım 1: Veriyi yumuşat.
-    if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
-        gpx.smooth(vertical=True, remove_extremes=True)
 
+    # Artık smoothing veya özel kazanç fonksiyonu yok, her şey tek bir yerde.
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
     
-    # Hibrit Metod Adım 2: Analizi yumuşatılmış veriyle yap.
     total_distance = gpxpy.gpx.GPXTrackSegment(all_points).length_3d()
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
