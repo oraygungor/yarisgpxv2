@@ -26,10 +26,9 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Karşılaştırma Analizi v2</h1>
+        <h1>GPX & Strava Performans Analizi</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
-        <!-- YENİ: Kontrol Paneli -->
         <div class="controls-section">
             <button id="strava-login-button" class="custom-button">Strava ile Giriş Yap</button>
             
@@ -54,18 +53,14 @@
         <div id="dashboard-container"></div>
     </div>
 
-    <script>
-        // Python kodunda değişiklik yok, bu yüzden buraya eklemiyorum.
-        const pythonCode = `... ÖNCEKİ KODUNUZLA AYNI ...`;
-        // Not: Python kodunun tamamını buraya eklemeyi unutmayın!
-
-        const pythonCode = `
+    <!-- DEĞİŞİKLİK: Python kodunu ayrı ve güvenli bir script etiketine taşıdık -->
+    <script type="text/python" id="python-code">
 import gpxpy
 import gpxpy.gpx
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 SEGMENT_DISTANCE_METERS = 50.0
@@ -86,8 +81,7 @@ def format_performance_change(change_percent):
     return f"{sign}{change_percent:.1f}%", color
 
 def moving_average(data, window_size):
-    if not isinstance(data, np.ndarray):
-        data = np.array(data)
+    if not isinstance(data, np.ndarray): data = np.array(data)
     padding = window_size - 1
     padded_data = np.pad(data, (padding // 2, padding - padding // 2), mode='edge')
     return np.convolve(padded_data, np.ones(window_size)/window_size, mode='valid')
@@ -138,9 +132,7 @@ def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
         'Tahmini Ortalama Pace': f'{format_pace_from_seconds(predicted_avg_pace_sec)}/km'
     }
     return {'poly': final_poly, 'kept_indices': kept_indices, 'outlier_indices': outlier_indices,
-            'all_slopes': all_slopes, 'all_paces_sec': all_paces, 
-            'smoothed_paces_sec': smoothed_paces_sec,
-            'stats': stats_dict}
+            'all_slopes': all_slopes, 'all_paces_sec': all_paces, 'smoothed_paces_sec': smoothed_paces_sec, 'stats': stats_dict}
 
 def create_comparison_dashboard(res1, res2, gpx_name):
     HEADER_HEIGHT, ROW_HEIGHT, MIN_GRAPH_HEIGHT, VERTICAL_PADDING = 40, 30, 450, 120
@@ -151,80 +143,43 @@ def create_comparison_dashboard(res1, res2, gpx_name):
     comparison_table_height_px = HEADER_HEIGHT + (num_comparison_rows * ROW_HEIGHT)
     total_height = MIN_GRAPH_HEIGHT + stats_table_height_px + comparison_table_height_px + VERTICAL_PADDING
     dynamic_row_heights = [MIN_GRAPH_HEIGHT / total_height, stats_table_height_px / total_height, comparison_table_height_px / total_height]
-
-    fig = make_subplots(
-        rows=3, cols=2,
-        specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "table"}, {"type": "table"}], [{"type": "table", "colspan": 2}, None]],
-        row_heights=dynamic_row_heights,
-        vertical_spacing=0.05,
-        subplot_titles=("<b>İlk Yarı Performans Modeli</b>", "<b>İkinci Yarı Performans Modeli</b>")
-    )
+    fig = make_subplots(rows=3, cols=2, specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "table"}, {"type": "table"}], [{"type": "table", "colspan": 2}, None]],
+        row_heights=dynamic_row_heights, vertical_spacing=0.05, subplot_titles=("<b>İlk Yarı Performans Modeli</b>", "<b>İkinci Yarı Performans Modeli</b>"))
 
     for i, res in enumerate([res1, res2]):
         col = i + 1
         hover_texts = np.array([f"Pace: {format_pace_from_seconds(p)}<br>Eğim: {s:.1f}%" for p, s in zip(res['all_paces_sec'], res['all_slopes'])])
-        
-        fig.add_trace(go.Scatter(
-            x=res['all_slopes'][res['outlier_indices']], y=res['smoothed_paces_sec'][res['outlier_indices']], 
-            mode='markers', name='Aykırı Değerler', marker=dict(color='lightgray'), text=hover_texts[res['outlier_indices']],
-            hoverinfo='text', showlegend=(i==0)), 
-        row=1, col=col)
-        
-        fig.add_trace(go.Scatter(
-            x=res['all_slopes'][res['kept_indices']], y=res['smoothed_paces_sec'][res['kept_indices']], 
-            mode='markers', name='Saklanan Veriler', marker=dict(color='#1f77b4'),
-            text=hover_texts[res['kept_indices']], hoverinfo='text', showlegend=(i==0)), 
-        row=1, col=col)
-        
+        fig.add_trace(go.Scatter(x=res['all_slopes'][res['outlier_indices']], y=res['smoothed_paces_sec'][res['outlier_indices']], mode='markers', name='Aykırı Değerler', marker=dict(color='lightgray'), text=hover_texts[res['outlier_indices']], hoverinfo='text', showlegend=(i==0)), row=1, col=col)
+        fig.add_trace(go.Scatter(x=res['all_slopes'][res['kept_indices']], y=res['smoothed_paces_sec'][res['kept_indices']], mode='markers', name='Saklanan Veriler', marker=dict(color='#1f77b4'), text=hover_texts[res['kept_indices']], hoverinfo='text', showlegend=(i==0)), row=1, col=col)
         kept_slopes = res['all_slopes'][res['kept_indices']]
         x_smooth = np.linspace(kept_slopes.min(), kept_slopes.max(), 200) if len(kept_slopes) > 0 else []
         y_smooth = res['poly'](x_smooth)
         fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Pace Modeli', line=dict(color='red', width=3), showlegend=(i==0)), row=1, col=col)
         fig.add_trace(go.Table(header=dict(values=['<b>Metrik</b>', '<b>Değer</b>'], fill_color='royalblue', font=dict(color='white')), cells=dict(values=[list(res['stats'].keys()), list(res['stats'].values())], fill_color='lightcyan', align='left')), row=2, col=col)
 
-    paces1 = [format_pace_from_seconds(res1['poly'](s)) for s in prediction_slopes]
-    paces2 = [format_pace_from_seconds(res2['poly'](s)) for s in prediction_slopes]
+    paces1 = [format_pace_from_seconds(res1['poly'](s)) for s in prediction_slopes]; paces2 = [format_pace_from_seconds(res2['poly'](s)) for s in prediction_slopes]
     changes, colors = [], []
     for s in prediction_slopes:
         p1_sec, p2_sec = res1['poly'](s), res2['poly'](s)
         change = ((p1_sec - p2_sec) / p1_sec) * 100 if p1_sec > 0 else 0
         text, color = format_performance_change(change)
-        changes.append(text)
-        colors.append(color)
+        changes.append(text); colors.append(color)
 
-    fig.add_trace(go.Table(
-        header=dict(values=['<b>Eğim</b>', '<b>Pace (İlk Yarı)</b>', '<b>Pace (İkinci Yarı)</b>', '<b>Performans Değişimi</b>'], font=dict(color='white'), fill_color='royalblue'),
-        cells=dict(values=[[f'{s}%' for s in prediction_slopes], paces1, paces2, changes], 
-                   fill_color=[['lightcyan']*len(changes)]*3 + [colors], align='left')
-    ), row=3, col=1)
+    fig.add_trace(go.Table(header=dict(values=['<b>Eğim</b>', '<b>Pace (İlk Yarı)</b>', '<b>Pace (İkinci Yarı)</b>', '<b>Performans Değişimi</b>'], font=dict(color='white'), fill_color='royalblue'),
+        cells=dict(values=[[f'{s}%' for s in prediction_slopes], paces1, paces2, changes], fill_color=[['lightcyan']*len(changes)]*3 + [colors], align='left')), row=3, col=1)
 
     min_pace_kept = min(min(res1['all_paces_sec'][res1['kept_indices']]), min(res2['all_paces_sec'][res2['kept_indices']]))
     max_pace_kept = max(max(res1['all_paces_sec'][res1['kept_indices']]), max(res2['all_paces_sec'][res2['kept_indices']]))
-    
-    tick_step = 60
-    start_tick = (int(min_pace_kept // tick_step)) * tick_step
-    end_tick = (int(max_pace_kept // tick_step) + 1) * tick_step
-    tick_values = np.arange(start_tick, end_tick + 1, tick_step)
-    tick_text = [format_pace_from_seconds(s) for s in tick_values]
-
-    min_range_view = min(tick_values) - 15 
-    max_range_view = max(tick_values) + 15
-
-    fig.update_yaxes(
-        tickvals=tick_values, ticktext=tick_text,
-        autorange=False, range=[max_range_view, min_range_view] 
-    )
-    
-    fig.update_xaxes(title_text="Eğim (%)", row=1)
-    fig.update_yaxes(title_text="Pace (dd:ss / km)", row=1, col=1)
-    fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", 
-                      height=total_height,
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-    
+    tick_step = 60; start_tick = (int(min_pace_kept // tick_step)) * tick_step; end_tick = (int(max_pace_kept // tick_step) + 1) * tick_step
+    tick_values = np.arange(start_tick, end_tick + 1, tick_step); tick_text = [format_pace_from_seconds(s) for s in tick_values]
+    min_range_view = min(tick_values) - 15; max_range_view = max(tick_values) + 15
+    fig.update_yaxes(tickvals=tick_values, ticktext=tick_text, autorange=False, range=[max_range_view, min_range_view])
+    fig.update_xaxes(title_text="Eğim (%)", row=1); fig.update_yaxes(title_text="Pace (dd:ss / km)", row=1, col=1)
+    fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", height=total_height, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig.to_json()
 
-# YENİ: Strava verisini GPX formatına dönüştüren Python fonksiyonu
-def convert_strava_stream_to_gpx(stream_data, activity_name="Strava Aktivitesi"):
+# DEĞİŞİKLİK: Fonksiyon artık aktivitenin başlangıç zamanını da alıyor
+def convert_strava_stream_to_gpx(stream_data, activity_name, start_time_iso):
     gpx = gpxpy.gpx.GPX()
     gpx_track = gpxpy.gpx.GPXTrack(name=activity_name)
     gpx.tracks.append(gpx_track)
@@ -235,10 +190,13 @@ def convert_strava_stream_to_gpx(stream_data, activity_name="Strava Aktivitesi")
     latlng_data = stream_data.get('latlng', {}).get('data', [])
     altitude_data = stream_data.get('altitude', {}).get('data', [])
     
-    start_time = datetime.fromisoformat(gpx.time.replace('Z', '+00:00')) if gpx.time else datetime.now()
+    # DEĞİŞİKLİK: Başlangıç zamanını ISO formatından datetime objesine çeviriyoruz
+    # Strava'dan gelen 'Z' (Zulu/UTC) zamanını doğru işlemek için.
+    start_time = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
 
     for i in range(len(latlng_data)):
-        point_time = start_time + timedelta(seconds=time_data[i]) if time_data else None
+        # Zaman akışı, başlangıçtan itibaren geçen saniyelerdir.
+        point_time = start_time + timedelta(seconds=time_data[i])
         point = gpxpy.gpx.GPXTrackPoint(
             latitude=latlng_data[i][0],
             longitude=latlng_data[i][1],
@@ -256,16 +214,9 @@ def run_analysis_from_gpx_string(gpx_string):
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
 
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
+    # GPX dosyasında zaman bilgisi yoksa analiz yapılamaz.
     if not all_points or not all_points[0].time:
-         # Strava verisinden geliyorsa zaman bilgisi ekle
-        activity_start_time = datetime.now()
-        dist_so_far = 0
-        all_points[0].time = activity_start_time
-        for i in range(1, len(all_points)):
-            dist_so_far += all_points[i].distance_2d(all_points[i-1]) or 0
-            # Ortalama 5:30 pace varsayımı (330 s/km)
-            time_increment = (dist_so_far / 1000) * 330
-            all_points[i].time = activity_start_time + timedelta(seconds=time_increment)
+         return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
 
     gpx_track = gpxpy.gpx.GPXTrack()
     gpx_segment = gpxpy.gpx.GPXTrackSegment(all_points)
@@ -273,7 +224,7 @@ def run_analysis_from_gpx_string(gpx_string):
     total_distance = gpx_segment.length_3d()
 
     if total_distance is None or total_distance < 1000:
-        return json.dumps({"error": "Analiz için yeterli mesafe yok."})
+        return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
 
     split_distance = total_distance / 2
     cumulative_distance, split_index = 0, -1
@@ -283,14 +234,10 @@ def run_analysis_from_gpx_string(gpx_string):
         if cumulative_distance >= split_distance:
             split_index = i
             break
-    if split_index == -1:
-        return json.dumps({"error": "Parkur bölünemedi."})
-
+    if split_index == -1: return json.dumps({"error": "Parkur bölünemedi."})
+    
     first_half_points, second_half_points = all_points[:split_index], all_points[split_index:]
-
-    # Aktivite ismini al
-    activity_name = gpx.name or gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite"
-
+    activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
 
@@ -298,11 +245,11 @@ def run_analysis_from_gpx_string(gpx_string):
         return create_comparison_dashboard(results1, results2, activity_name)
     else:
         return json.dumps({"error": "Koşunun bir veya iki yarısı için analiz başarısız oldu."})
-`;
+    </script>
 
-        // ---- YENİ JAVASCRIPT BÖLÜMÜ ----
 
-        // Global Değişkenler
+    <script>
+        // --- Global Değişkenler ---
         const loader = document.getElementById('loader');
         const statusMessage = document.getElementById('status-message');
         const dashboardContainer = document.getElementById('dashboard-container');
@@ -315,34 +262,24 @@ def run_analysis_from_gpx_string(gpx_string):
         const activitySelector = document.getElementById('activity-selector');
         const gpxFileInput = document.getElementById('gpx-file-input');
 
-        // YENİ: Hata yönetimi ile API isteği yapan fonksiyon
+        // --- Fonksiyonlar ---
         async function fetchWithAuth(url, options = {}) {
             const token = localStorage.getItem('strava_token');
             if (!token) {
                 handleLogout();
                 throw new Error("Giriş yapılmamış.");
             }
-
-            const headers = {
-                'Authorization': token, // Token'ı Bearer olmadan gönderiyoruz, server.py böyle bekliyor.
-                'Content-Type': 'application/json',
-                ...options.headers,
-            };
-
+            const headers = { 'Authorization': token, 'Content-Type': 'application/json', ...options.headers };
             const response = await fetch(url, { ...options, headers });
-
-            if (response.status === 401) { // Unauthorized hatası!
+            if (response.status === 401) {
                 handleLogout();
                 statusMessage.textContent = "Oturum süreniz doldu. Lütfen yeniden giriş yapın.";
                 throw new Error("Authorization Error");
             }
-            if (!response.ok) {
-                throw new Error(`API Hatası: ${response.statusText}`);
-            }
+            if (!response.ok) throw new Error(`API Hatası: ${response.statusText}`);
             return response.json();
         }
 
-        // YENİ: Çıkış yapma mantığı
         function handleLogout() {
             localStorage.removeItem('strava_token');
             stravaControls.style.display = 'none';
@@ -352,7 +289,6 @@ def run_analysis_from_gpx_string(gpx_string):
             statusMessage.textContent = "Çıkış yapıldı. Analiz için giriş yapın veya GPX dosyası yükleyin.";
         }
         
-        // YENİ: Giriş yapmış kullanıcı için arayüzü ayarla
         function setupLoggedInUI() {
             loginButton.style.display = 'none';
             stravaControls.style.display = 'block';
@@ -360,7 +296,6 @@ def run_analysis_from_gpx_string(gpx_string):
             loadTrainingRuns();
         }
 
-        // YENİ: Strava'dan koşuları yükle
         async function loadTrainingRuns() {
             try {
                 const activities = await fetchWithAuth('/api/get_training_runs');
@@ -372,26 +307,25 @@ def run_analysis_from_gpx_string(gpx_string):
                 activities.forEach(act => {
                     const option = document.createElement('option');
                     option.value = act.id;
-                    option.textContent = `(${ (act.distance / 1000).toFixed(1) } km) ${act.name}`;
-                    option.dataset.name = act.name; // Aktivite ismini sakla
+                    option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
+                    option.dataset.name = act.name;
+                    option.dataset.startTime = act.start_date_local; // DEĞİŞİKLİK: Başlangıç zamanını sakla
                     activitySelector.appendChild(option);
                 });
                 statusMessage.textContent = "Hazır. Analiz için bir aktivite seçin veya GPX dosyası yükleyin.";
             } catch (error) {
                 console.error("Aktiviteler yüklenemedi:", error);
-                if (error.message !== "Authorization Error") {
-                   statusMessage.textContent = "Aktiviteler yüklenirken bir hata oluştu.";
-                }
+                if (error.message !== "Authorization Error") statusMessage.textContent = "Aktiviteler yüklenirken bir hata oluştu.";
             }
         }
         
-        // YENİ: Seçilen aktivite için analiz başlat
         async function analyzeSelectedActivity() {
             const selectedOption = activitySelector.options[activitySelector.selectedIndex];
             const activityId = selectedOption.value;
-            const activityName = selectedOption.dataset.name;
-
             if (!activityId) return;
+
+            const activityName = selectedOption.dataset.name;
+            const activityStartTime = selectedOption.dataset.startTime; // DEĞİŞİKLİK: Başlangıç zamanını al
 
             statusMessage.textContent = `"${activityName}" aktivitesi için veri akışı alınıyor...`;
             loader.style.display = 'block';
@@ -403,29 +337,22 @@ def run_analysis_from_gpx_string(gpx_string):
                     body: JSON.stringify({ activity_ids: [activityId] })
                 });
 
-                if (!streams || streams.length === 0) {
-                    throw new Error("Aktivite için veri akışı alınamadı.");
-                }
-
+                if (!streams || streams.length === 0) throw new Error("Aktivite için veri akışı alınamadı.");
+                
                 statusMessage.textContent = "Veri GPX formatına dönüştürülüyor ve analiz ediliyor...";
                 
-                // Strava verisini GPX'e çevir ve analizi çalıştır
                 const gpxConverter = pyodide.globals.get('convert_strava_stream_to_gpx');
-                // Strava'dan gelen ilk veri setini alıyoruz.
-                const gpxString = gpxConverter(streams[0], activityName);
+                const gpxString = gpxConverter(streams[0], activityName, activityStartTime); // DEĞİŞİKLİK: Başlangıç zamanını Python'a gönder
                 
                 runAnalysis(gpxString);
 
             } catch (error) {
                 console.error("Analiz hatası:", error);
-                 if (error.message !== "Authorization Error") {
-                    statusMessage.textContent = `Analiz sırasında hata: ${error.message}`;
-                 }
+                 if (error.message !== "Authorization Error") statusMessage.textContent = `Analiz sırasında hata: ${error.message}`;
                 loader.style.display = 'none';
             }
         }
 
-        // GENEL: Analizi çalıştıran ana fonksiyon
         function runAnalysis(gpxContent) {
             try {
                 const analysisFunc = pyodide.globals.get('run_analysis_from_gpx_string');
@@ -448,46 +375,49 @@ def run_analysis_from_gpx_string(gpx_string):
             }
         }
 
-
-        // ---- ANA UYGULAMA MANTIĞI ----
         async function main() {
             statusMessage.textContent = "Python ortamı yükleniyor...";
             loader.style.display = 'block';
 
-            pyodide = await loadPyodide();
-            statusMessage.textContent = "Gerekli kütüphaneler yükleniyor...";
-            await pyodide.loadPackage(["numpy", "micropip"]);
-            const micropip = pyodide.pyimport("micropip");
-            await micropip.install(['gpxpy', 'plotly']);
-            
-            pyodide.runPython(pythonCode);
-            console.log("Pyodide ve kütüphaneler hazır.");
-            loader.style.display = 'none';
+            try {
+                pyodide = await loadPyodide();
+                statusMessage.textContent = "Gerekli kütüphaneler yükleniyor...";
+                await pyodide.loadPackage(["numpy", "micropip"]);
+                const micropip = pyodide.pyimport("micropip");
+                await micropip.install(['gpxpy', 'plotly']);
+                
+                // DEĞİŞİKLİK: Python kodunu ID'si ile DOM'dan alıyoruz.
+                const pythonCode = document.getElementById('python-code').textContent;
+                pyodide.runPython(pythonCode);
+                console.log("Pyodide ve kütüphaneler hazır.");
 
-            // --- Event Listeners ---
-            loginButton.addEventListener('click', () => { window.location.href = '/login'; });
-            logoutButton.addEventListener('click', handleLogout);
-            activitySelector.addEventListener('change', analyzeSelectedActivity);
-            
-            gpxFileInput.addEventListener('change', (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
+                // Event Listeners
+                loginButton.addEventListener('click', () => { window.location.href = '/login'; });
+                logoutButton.addEventListener('click', handleLogout);
+                activitySelector.addEventListener('change', analyzeSelectedActivity);
+                gpxFileInput.addEventListener('change', (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    statusMessage.textContent = "GPX dosyası analiz ediliyor...";
+                    loader.style.display = 'block';
+                    dashboardContainer.innerHTML = ''; 
+                    const reader = new FileReader();
+                    reader.onload = (e) => runAnalysis(e.target.result);
+                    reader.readAsText(file);
+                });
 
-                statusMessage.textContent = "GPX dosyası analiz ediliyor...";
-                loader.style.display = 'block';
-                dashboardContainer.innerHTML = ''; 
-
-                const reader = new FileReader();
-                reader.onload = (e) => runAnalysis(e.target.result);
-                reader.readAsText(file);
-            });
-
-            // --- Sayfa Yüklendiğinde Oturum Kontrolü ---
-            if (localStorage.getItem('strava_token')) {
-                setupLoggedInUI();
-            } else {
-                handleLogout(); // Arayüzü başlangıç durumuna ayarla
-                statusMessage.textContent = "Başlamak için Strava ile giriş yapın veya bir GPX dosyası yükleyin.";
+                // Oturum Kontrolü
+                if (localStorage.getItem('strava_token')) {
+                    setupLoggedInUI();
+                } else {
+                    handleLogout();
+                    statusMessage.textContent = "Başlamak için Strava ile giriş yapın veya bir GPX dosyası yükleyin.";
+                }
+            } catch (error) {
+                console.error("Uygulama başlatılamadı:", error);
+                statusMessage.textContent = "Uygulama başlatılırken kritik bir hata oluştu. Lütfen sayfayı yenileyin.";
+            } finally {
+                loader.style.display = 'none';
             }
         }
 
