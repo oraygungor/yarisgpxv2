@@ -324,7 +324,6 @@ def run_analysis_from_gpx_string(gpx_string):
             dashboardContainer.innerHTML = '';
             
             try {
-                // DEĞİŞİKLİK: Yeni API endpoint'ini çağırıyoruz: /get_gpx/<id>
                 const streamData = await fetchWithAuth(`/get_gpx/${activityId}`);
 
                 if (!streamData || Object.keys(streamData).length === 0) throw new Error("Aktivite için veri akışı alınamadı.");
@@ -332,17 +331,27 @@ def run_analysis_from_gpx_string(gpx_string):
                 statusMessage.textContent = "Veri GPX formatına dönüştürülüyor ve analiz ediliyor...";
                 
                 const gpxConverter = pyodide.globals.get('convert_strava_stream_to_gpx');
-                const gpxString = gpxConverter(streamData, activityName, activityStartTime);
+                
+                // ---- DEĞİŞİKLİK BURADA ----
+                // Python'a JS nesnesini doğrudan göndermek yerine,
+                // onu bir Map'e dönüştürüyoruz. Bu, Pyodide'ın onu
+                // doğru bir şekilde Python sözlüğüne (dict) çevirmesini garantiler.
+                const streamDataAsMap = new Map(Object.entries(streamData));
+
+                // Python fonksiyonunu güncellenmiş veriyle çağırıyoruz.
+                const gpxString = gpxConverter(streamDataAsMap, activityName, activityStartTime);
+                // ---- DEĞİŞİKLİK SONU ----
                 
                 runAnalysis(gpxString);
 
             } catch (error) {
                 console.error("Analiz hatası:", error);
-                 if (error.message !== "Authorization Error") statusMessage.textContent = `Analiz sırasında hata: ${error.message}`;
+                 if (error.message !== "Authorization Error") {
+                    statusMessage.textContent = `Analiz sırasında hata: ${error.message}`;
+                 }
                 loader.style.display = 'none';
             }
         }
-
         function runAnalysis(gpxContent) {
             try {
                 const analysisFunc = pyodide.globals.get('run_analysis_from_gpx_string');
