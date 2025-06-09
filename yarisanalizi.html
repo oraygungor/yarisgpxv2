@@ -283,33 +283,34 @@ def run_analysis_from_gpx_string(gpx_string):
             statusMessage.textContent = "Çıkış yapıldı. Analiz için giriş yapın veya GPX dosyası yükleyin.";
         }
         
-        // Bu fonksiyon artık sadece önbellekteki veriyi filtreleyip gösterir.
-        function filterAndPopulateActivities() {
-            const cachedActivities = JSON.parse(sessionStorage.getItem('strava_activities_cache') || '[]');
-            const filterValue = activityFilter.value;
-            
-            const filtered = cachedActivities.filter(act => {
-                const isLongEnough = act.distance >= 15000;
-                if (filterValue === 'All') return isLongEnough;
-                return isLongEnough && act.sport_type === filterValue;
-            });
+     
+function filterAndPopulateActivities() {
+    const cachedActivities = JSON.parse(sessionStorage.getItem('strava_activities_cache') || '[]');
+    const filterValue = activityFilter.value;
+    
+    const filtered = cachedActivities.filter(act => {
+        const isLongEnough = act.distance >= 15000;
+        if (filterValue === 'All') return isLongEnough;
+        return isLongEnough && act.sport_type === filterValue;
+    });
 
-            activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
-            if (filtered.length === 0) {
-                 activitySelector.innerHTML = `<option value="">Bu filtrede koşu bulunamadı (15km+).</option>`;
-                 return;
-            }
-            filtered.forEach(act => {
-                const option = document.createElement('option');
-                option.value = act.id;
-                // Yeni sunucu yanıtında 'name' yok, bu yüzden ID ve mesafeyi gösteriyoruz.
-                option.textContent = `(${ (act.distance / 1000).toFixed(1) } km) ${act.sport_type} - ID: ${act.id}`;
-                option.dataset.name = `Activity ${act.id}`; // İsim olmadığı için ID kullanıyoruz.
-                option.dataset.startTime = act.start_date; // Sunucunuz start_date göndermeli.
-                activitySelector.appendChild(option);
-            });
-        }
-        
+    activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
+    if (filtered.length === 0) {
+         activitySelector.innerHTML = `<option value="">Bu filtrede koşu bulunamadı (15km+).</option>`;
+         return;
+    }
+    filtered.forEach(act => {
+        const option = document.createElement('option');
+        option.value = act.id;
+        // --- DEĞİŞİKLİK BURADA ---
+        // Artık sunucudan gelen 'name' alanını kullanıyoruz.
+        option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
+        option.dataset.name = act.name; // Gerçek aktivite adını sakla
+        option.dataset.startTime = act.start_date; // Gerçek başlangıç tarihini sakla
+        // --- DEĞİŞİKLİK SONU ---
+        activitySelector.appendChild(option);
+    });
+}
         function setupLoggedInUI() {
             loginButton.style.display = 'none';
             stravaControls.style.display = 'block';
