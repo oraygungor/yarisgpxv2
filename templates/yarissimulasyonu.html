@@ -22,7 +22,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Performans Modeli ve Yarış Simülatörü</h1>
+        <h1>Strava Yarış Simülatörü</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -33,7 +33,6 @@
 
         <div class="box" id="model-box" style="display: none;">
             <h2>Adım 2: Performans Modeliniz</h2>
-            <!-- DEĞİŞİKLİK: Kullanıcı giriş alanları kaldırıldı -->
             <p>15-40 km arası son 10 koşunuz analiz edilerek kişisel Eğim/Pace modeliniz otomatik olarak oluşturuldu.</p>
             <div id="model-graph"></div>
             <p id="formula-display" style="display: none;"></p>
@@ -308,31 +307,36 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 loader.style.display = 'none';
             }
 
-            // DEĞİŞİKLİK: Model oluşturma süreci otomatikleştirildi
-            async function createModelAutomatically(allRuns) {
+            async function createModelAutomatically(allActivities) {
                 const minDist = 15000; // 15 km
                 const maxDist = 40000; // 40 km
 
-                const filteredRuns = allRuns.filter(run => run.distance >= minDist && run.distance <= maxDist);
-                const latestRuns = filteredRuns.slice(-10);
+                const filteredRuns = allActivities
+                    .filter(act => act.type === 'Run' && act.distance >= minDist && act.distance <= maxDist)
+                    .slice(0, 10); // En son 10 koşuyu al
 
-                if (latestRuns.length < 3) {
-                    throw new Error(`Model oluşturmak için 15-40 km aralığında yeterli koşu bulunamadı (Bulunan: ${latestRuns.length}).`);
+                if (filteredRuns.length < 3) {
+                    throw new Error(`Model oluşturmak için 15-40 km aralığında yeterli koşu bulunamadı (Bulunan: ${filteredRuns.length}).`);
                 }
                 
-                status.textContent = `15-40 km aralığındaki son ${latestRuns.length} koşu analiz edilerek model oluşturuluyor...`;
+                status.textContent = `15-40 km aralığındaki son ${filteredRuns.length} koşu analiz edilerek model oluşturuluyor...`;
                 loader.style.display = 'block';
                 formulaDisplay.style.display = 'none';
                 simulationBox.style.display = 'none';
-
-                const activityIds = latestRuns.map(run => run.id);
-                const streamResponse = await fetch('/api/get_activity_streams', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': localStorage.getItem('strava_token') },
-                    body: JSON.stringify({ activity_ids: activityIds })
-                });
-                if (!streamResponse.ok) throw new Error(`API Hatası: ${streamResponse.status} ${streamResponse.statusText}`);
-                const streams = await streamResponse.json();
+                
+                // DEĞİŞİKLİK: Senin sunucunla uyumlu hale getirildi. 
+                // Artık stream'ler tek tek, döngü içinde çekiliyor.
+                const token = localStorage.getItem('strava_token');
+                const streamPromises = filteredRuns.map(run => 
+                    fetch(`/get_gpx/${run.id}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    }).then(res => {
+                        if (!res.ok) throw new Error(`Aktivite ${run.id} verisi çekilemedi.`);
+                        return res.json();
+                    })
+                );
+                
+                const streams = await Promise.all(streamPromises);
                 
                 const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points');
                 const gpxPoints = convertFunc(JSON.stringify(streams));
@@ -362,11 +366,15 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 status.textContent = "Tüm antrenmanlarınız Strava'dan çekiliyor...";
                 loader.style.display = 'block';
                 try {
-                    const response = await fetch('/api/get_training_runs', { headers: { 'Authorization': localStorage.getItem('strava_token') } });
+                    const token = localStorage.getItem('strava_token');
+                    // DEĞİŞİKLİK: Senin sunucunla uyumlu hale getirildi
+                    const response = await fetch('/get_activities', { 
+                        headers: { 'Authorization': `Bearer ${token}` } 
+                    });
                     if (!response.ok) throw new Error(`API Hatası: ${response.status} ${response.statusText}`);
                     
-                    const allRuns = await response.json();
-                    await createModelAutomatically(allRuns);
+                    const allActivities = await response.json();
+                    await createModelAutomatically(allActivities);
 
                 } catch (error) {
                     console.error("Veri yükleme/Model oluşturma hatası:", error);
@@ -416,9 +424,13 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
 
             const token = localStorage.getItem('strava_token');
             if (token) {
+                // Token varsa doğrudan handleLogin'i çağırır, o da modeli oluşturur
                 handleLogin();
             } else {
+                // Token yoksa, butonu gösterir.
                 status.textContent = "Başlamak için Strava hesabınıza bağlanın.";
+                loginButton.style.display = 'block';
+                loginBox.style.display = 'block';
             }
 
             loginButton.onclick = () => { window.location.href = '/login'; };
