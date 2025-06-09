@@ -26,16 +26,18 @@
 </head>
 <body>
     <div class="container">
-        <h1>GPX & Strava Performans Analizi v6</h1>
+        <h1>GPX & Strava Performans Analizi</h1>
         <p>Strava aktivitelerinizi analiz edin veya bir GPX dosyası yükleyerek performansınızı karşılaştırın.</p>
         
         <div class="controls-section">
             <button id="strava-login-button" class="custom-button">Strava ile Giriş Yap</button>
             
+            <!-- DEĞİŞİKLİK: Arayüz güncellendi -->
             <div id="strava-controls" style="display: none;">
-                <span>Analiz için bir antrenman seçin (15km+ Koşular):</span>
+                <button id="load-activities-button" class="custom-button">Aktiviteleri Yükle / Yenile</button>
+                <span>Analiz için bir antrenman seçin:</span>
                 <select id="activity-selector">
-                    <option value="">Yükleniyor...</option>
+                    <option value="">Önce aktiviteleri yükleyin...</option>
                 </select>
                 <button id="strava-logout-button" class="custom-button logout-button">Çıkış Yap</button>
             </div>
@@ -119,13 +121,9 @@ def perform_full_analysis(gpx_points, segment_length, outlier_threshold):
     final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2))
     outlier_mask = np.ones(len(all_slopes), dtype=bool); outlier_mask[kept_indices] = False
     outlier_indices = np.where(outlier_mask)[0]
-    
     temp_gpx_seg = gpxpy.gpx.GPXTrackSegment(points=gpx_points)
     total_dist_km = temp_gpx_seg.length_3d() / 1000
-    
-    # --- DEĞİŞİKLİK: gpxpy'nin standart metodunu kullanıyoruz, çünkü veri artık yumuşatılmış ---
     uphill, downhill = temp_gpx_seg.get_uphill_downhill()
-    
     moving_data = temp_gpx_seg.get_moving_data()
     actual_avg_pace_sec = moving_data.moving_time / (moving_data.moving_distance / 1000) if moving_data and moving_data.moving_distance > 0 else 0
     predicted_avg_pace_sec = np.mean(final_poly(all_slopes)) if len(all_slopes) > 0 else 0
@@ -142,7 +140,6 @@ def create_comparison_dashboard(res1, res2, gpx_name):
     total_height = MIN_GRAPH_HEIGHT + stats_table_height_px + comparison_table_height_px + VERTICAL_PADDING
     dynamic_row_heights = [MIN_GRAPH_HEIGHT / total_height, stats_table_height_px / total_height, comparison_table_height_px / total_height]
     fig = make_subplots(rows=3, cols=2, specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "table"}, {"type": "table"}], [{"type": "table", "colspan": 2}, None]], row_heights=dynamic_row_heights, vertical_spacing=0.05, subplot_titles=("<b>İlk Yarı Performans Modeli</b>", "<b>İkinci Yarı Performans Modeli</b>"))
-
     for i, res in enumerate([res1, res2]):
         col = i + 1
         hover_texts = np.array([f"Pace: {format_pace_from_seconds(p)}<br>Eğim: {s:.1f}%" for p, s in zip(res['all_paces_sec'], res['all_slopes'])])
@@ -153,7 +150,6 @@ def create_comparison_dashboard(res1, res2, gpx_name):
         y_smooth = res['poly'](x_smooth)
         fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Pace Modeli', line=dict(color='red', width=3), showlegend=(i==0)), row=1, col=col)
         fig.add_trace(go.Table(header=dict(values=['<b>Metrik</b>', '<b>Değer</b>'], fill_color='royalblue', font=dict(color='white')), cells=dict(values=[list(res['stats'].keys()), list(res['stats'].values())], fill_color='lightcyan', align='left')), row=2, col=col)
-
     paces1 = [format_pace_from_seconds(res1['poly'](s)) for s in prediction_slopes]; paces2 = [format_pace_from_seconds(res2['poly'](s)) for s in prediction_slopes]
     changes, colors = [], []
     for s in prediction_slopes:
@@ -162,21 +158,13 @@ def create_comparison_dashboard(res1, res2, gpx_name):
         text, color = format_performance_change(change)
         changes.append(text); colors.append(color)
     fig.add_trace(go.Table(header=dict(values=['<b>Eğim</b>', '<b>Pace (İlk Yarı)</b>', '<b>Pace (İkinci Yarı)</b>', '<b>Performans Değişimi</b>'], font=dict(color='white'), fill_color='royalblue'), cells=dict(values=[[f'{s}%' for s in prediction_slopes], paces1, paces2, changes], fill_color=[['lightcyan']*len(changes)]*3 + [colors], align='left')), row=3, col=1)
-
     model_slope_range = np.linspace(-35, 35, 100)
-    model_paces1 = res1['poly'](model_slope_range)
-    model_paces2 = res2['poly'](model_slope_range)
-    y_axis_min_pace = min(np.min(model_paces1), np.min(model_paces2))
-    y_axis_max_pace = max(np.max(model_paces1), np.max(model_paces2))
+    model_paces1 = res1['poly'](model_slope_range); model_paces2 = res2['poly'](model_slope_range)
+    y_axis_min_pace = min(np.min(model_paces1), np.min(model_paces2)); y_axis_max_pace = max(np.max(model_paces1), np.max(model_paces2))
     fig.update_yaxes(autorange=False, range=[y_axis_max_pace + 20, y_axis_min_pace - 20])
-    
-    tick_step = 60
-    start_tick = (int(y_axis_min_pace // tick_step)) * tick_step
-    end_tick = (int(y_axis_max_pace // tick_step) + 2) * tick_step
-    tick_values = np.arange(start_tick, end_tick, tick_step)
-    tick_text = [format_pace_from_seconds(s) for s in tick_values]
+    tick_step = 60; start_tick = (int(y_axis_min_pace // tick_step)) * tick_step; end_tick = (int(y_axis_max_pace // tick_step) + 2) * tick_step
+    tick_values = np.arange(start_tick, end_tick, tick_step); tick_text = [format_pace_from_seconds(s) for s in tick_values]
     fig.update_yaxes(tickvals=tick_values, ticktext=tick_text)
-
     fig.update_xaxes(range=[-40, 40], title_text="Eğim (%)", row=1)
     fig.update_yaxes(title_text="Pace (dd:ss / km)", row=1, col=1)
     fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", height=total_height, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
@@ -184,63 +172,45 @@ def create_comparison_dashboard(res1, res2, gpx_name):
 
 def convert_strava_stream_to_gpx(stream_data_json, activity_name, start_time_iso):
     stream_data = json.loads(stream_data_json)
-    gpx = gpxpy.gpx.GPX()
-    gpx_track = gpxpy.gpx.GPXTrack(name=activity_name)
-    gpx.tracks.append(gpx_track)
-    gpx_segment = gpxpy.gpx.GPXTrackSegment()
-    gpx_track.segments.append(gpx_segment)
-    time_data = stream_data.get('time', {}).get('data', [])
-    latlng_data = stream_data.get('latlng', {}).get('data', [])
-    altitude_data = stream_data.get('altitude', {}).get('data', [])
+    gpx = gpxpy.gpx.GPX(); gpx_track = gpxpy.gpx.GPXTrack(name=activity_name); gpx.tracks.append(gpx_track)
+    gpx_segment = gpxpy.gpx.GPXTrackSegment(); gpx_track.segments.append(gpx_segment)
+    time_data = stream_data.get('time', {}).get('data', []); latlng_data = stream_data.get('latlng', {}).get('data', []); altitude_data = stream_data.get('altitude', {}).get('data', [])
     start_time = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
     for i in range(len(latlng_data)):
         point_time = start_time + timedelta(seconds=time_data[i])
-        point = gpxpy.gpx.GPXTrackPoint(latitude=latlng_data[i][0], longitude=latlng_data[i][1],
-            elevation=altitude_data[i] if altitude_data else None, time=point_time)
+        point = gpxpy.gpx.GPXTrackPoint(latitude=latlng_data[i][0], longitude=latlng_data[i][1], elevation=altitude_data[i] if altitude_data else None, time=point_time)
         gpx_segment.points.append(point)
     return gpx.to_xml()
 
-# --- DEĞİŞİKLİK: Bu fonksiyon artık veriyi önce yumuşatıyor ---
 def run_analysis_from_gpx_string(gpx_string):
     try:
         gpx = gpxpy.parse(gpx_string)
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
 
-    # --- YENİ: Yükseklik verisini yumuşatma adımı ---
-    # Bu, ham verideki gürültüyü temizler ve kazanç hesabını daha doğru hale getirir.
+    # DÜZELTME: 'remove_extrems' -> 'remove_extremes' olarak düzeltildi.
     if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
-        gpx.smooth(vertical=True, remove_extrems=True)
+        gpx.smooth(vertical=True, remove_extremes=True)
 
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
-         
-    gpx_track = gpxpy.gpx.GPXTrack()
-    gpx_segment = gpxpy.gpx.GPXTrackSegment(all_points)
-    gpx_track.segments.append(gpx_segment)
+    gpx_track = gpxpy.gpx.GPXTrack(); gpx_segment = gpxpy.gpx.GPXTrackSegment(all_points); gpx_track.segments.append(gpx_segment)
     total_distance = gpx_segment.length_3d()
-
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
-
     split_distance = total_distance / 2
     cumulative_distance, split_index = 0, -1
     for i in range(1, len(all_points)):
         dist_3d = all_points[i].distance_3d(all_points[i-1])
         if dist_3d is not None: cumulative_distance += dist_3d
         if cumulative_distance >= split_distance:
-            split_index = i
-            break
+            split_index = i; break
     if split_index == -1: return json.dumps({"error": "Parkur bölünemedi."})
-    
-    first_half_points = all_points[:split_index]
-    second_half_points = all_points[split_index:]
+    first_half_points = all_points[:split_index]; second_half_points = all_points[split_index:]
     activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
-    
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
-    
     if results1 and results2:
         return create_comparison_dashboard(results1, results2, activity_name)
     else:
@@ -249,7 +219,7 @@ def run_analysis_from_gpx_string(gpx_string):
 
 
     <script>
-        // --- JAVASCRIPT PART IS UNCHANGED ---
+        // --- JAVASCRIPT PART WITH CACHING LOGIC ---
         const loader = document.getElementById('loader');
         const statusMessage = document.getElementById('status-message');
         const dashboardContainer = document.getElementById('dashboard-container');
@@ -259,6 +229,9 @@ def run_analysis_from_gpx_string(gpx_string):
         const stravaControls = document.getElementById('strava-controls');
         const activitySelector = document.getElementById('activity-selector');
         const gpxFileInput = document.getElementById('gpx-file-input');
+        // YENİ: Aktivite yükleme/yenileme butonu
+        const loadActivitiesButton = document.getElementById('load-activities-button');
+
         async function fetchWithAuth(url, options = {}) {
             const token = localStorage.getItem('strava_token');
             if (!token) {
@@ -275,46 +248,72 @@ def run_analysis_from_gpx_string(gpx_string):
             if (!response.ok) throw new Error(`API Hatası: ${response.statusText}`);
             return response.json();
         }
+
         function handleLogout() {
             localStorage.removeItem('strava_token');
+            sessionStorage.removeItem('strava_activities'); // Önbelleği de temizle
             stravaControls.style.display = 'none';
             loginButton.style.display = 'inline-block';
-            activitySelector.innerHTML = '<option value="">Yükleniyor...</option>';
+            activitySelector.innerHTML = '<option value="">Önce aktiviteleri yükleyin...</option>';
             dashboardContainer.innerHTML = '';
             statusMessage.textContent = "Çıkış yapıldı. Analiz için giriş yapın veya GPX dosyası yükleyin.";
         }
+        
+        // YENİ: Aktivite listesini alıp dropdown'ı dolduran ayrı fonksiyon
+        function populateActivitySelector(activities) {
+            activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
+            if (activities.length === 0) {
+                 activitySelector.innerHTML = '<option value="">Analize uygun koşu bulunamadı (15km+).</option>';
+                 return;
+            }
+            activities.forEach(act => {
+                const option = document.createElement('option');
+                option.value = act.id;
+                option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
+                option.dataset.name = act.name;
+                option.dataset.startTime = act.start_date;
+                activitySelector.appendChild(option);
+            });
+        }
+
         function setupLoggedInUI() {
             loginButton.style.display = 'none';
             stravaControls.style.display = 'block';
-            statusMessage.textContent = "Strava aktiviteleri yükleniyor...";
-            loadTrainingRuns();
+            
+            // YENİ: Önbelleği kontrol et
+            const cachedActivities = sessionStorage.getItem('strava_activities');
+            if (cachedActivities) {
+                console.log("Aktiviteler önbellekten yüklendi.");
+                const activities = JSON.parse(cachedActivities);
+                populateActivitySelector(activities);
+                statusMessage.textContent = "Aktiviteler önbellekten yüklendi. Listeyi yenilemek için butona tıklayın.";
+            } else {
+                statusMessage.textContent = "Hazır. Analiz için Strava aktivitelerinizi yükleyin.";
+            }
         }
+
         async function loadTrainingRuns() {
+            statusMessage.textContent = "Strava aktiviteleri yükleniyor...";
+            loader.style.display = 'block';
             try {
                 const allActivities = await fetchWithAuth('/get_activities');
                 const filteredActivities = allActivities.filter(act => 
                     (act.type === 'Run' || act.type === 'TrailRun') && act.distance >= 15000
                 );
                 filteredActivities.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
-                activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
-                if (filteredActivities.length === 0) {
-                     activitySelector.innerHTML = '<option value="">Analize uygun koşu bulunamadı (15km+).</option>';
-                     return;
-                }
-                filteredActivities.forEach(act => {
-                    const option = document.createElement('option');
-                    option.value = act.id;
-                    option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
-                    option.dataset.name = act.name;
-                    option.dataset.startTime = act.start_date;
-                    activitySelector.appendChild(option);
-                });
-                statusMessage.textContent = "Hazır. Analiz için bir aktivite seçin veya GPX dosyası yükleyin.";
+
+                populateActivitySelector(filteredActivities);
+                // YENİ: Başarılı çekme sonrası önbelleğe kaydet
+                sessionStorage.setItem('strava_activities', JSON.stringify(filteredActivities));
+                statusMessage.textContent = "Aktivite listesi başarıyla yüklendi ve yenilendi.";
             } catch (error) {
                 console.error("Aktiviteler yüklenemedi:", error);
                 if (error.message !== "Authorization Error") statusMessage.textContent = "Aktiviteler yüklenirken bir hata oluştu.";
+            } finally {
+                loader.style.display = 'none';
             }
         }
+        
         async function analyzeSelectedActivity() {
             const selectedOption = activitySelector.options[activitySelector.selectedIndex];
             const activityId = selectedOption.value;
@@ -372,9 +371,11 @@ def run_analysis_from_gpx_string(gpx_string):
                 const pythonCode = document.getElementById('python-code').textContent;
                 pyodide.runPython(pythonCode);
                 console.log("Pyodide ve kütüphaneler hazır.");
+                // Event Listeners
                 loginButton.addEventListener('click', () => { window.location.href = '/login'; });
                 logoutButton.addEventListener('click', handleLogout);
                 activitySelector.addEventListener('change', analyzeSelectedActivity);
+                loadActivitiesButton.addEventListener('click', loadTrainingRuns); // YENİ
                 gpxFileInput.addEventListener('change', (event) => {
                     const file = event.target.files[0];
                     if (!file) return;
