@@ -24,7 +24,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v2</h1>
+        <h1>Strava Yarış Simülatörü</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -33,7 +33,6 @@
             </div>
         </div>
 
-        <!-- YENİ: Model Seçim Kutusu -->
         <div class="box" id="model-selection-box" style="display: none;">
             <h2>Adım 2: Model Tipini Seçin</h2>
             <p>Simülasyon için hangi performans modelini kullanmak istersiniz?</p>
@@ -271,20 +270,33 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                     return;
                 }
                 
-                status.textContent = `${modelType} modeliniz, ${latestRuns.length} koşu analiz edilerek oluşturuluyor...`;
+                status.textContent = `${modelType} modeliniz için veriler çekiliyor...`;
                 loader.style.display = 'block';
                 modelSelectionBox.style.display = 'none';
 
                 try {
                     const token = localStorage.getItem('strava_token');
-                    const streamPromises = latestRuns.map(run => 
-                        fetch(`/get_gpx/${run.id}`, { headers: { 'Authorization': `Bearer ${token}` } })
-                        .then(res => {
-                            if (!res.ok) throw new Error(`Aktivite ${run.id} verisi çekilemedi.`);
-                            return res.json();
-                        })
-                    );
-                    const streams = await Promise.all(streamPromises);
+                    
+                    // DEĞİŞİKLİK: Promise.all yerine seri (serial) for...of döngüsü kullanılıyor.
+                    const streams = [];
+                    let count = 0;
+                    for (const run of latestRuns) {
+                        count++;
+                        status.textContent = `${modelType} verisi çekiliyor: ${count}/${latestRuns.length}`;
+                        
+                        const response = await fetch(`/get_gpx/${run.id}`, { 
+                            headers: { 'Authorization': `Bearer ${token}` } 
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`Aktivite ${run.id} verisi çekilemedi. Sunucu yanıtı: ${response.statusText}`);
+                        }
+                        
+                        const streamData = await response.json();
+                        streams.push(streamData);
+                    }
+
+                    status.textContent = `Veriler analiz ediliyor ve model oluşturuluyor...`;
                     
                     const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points');
                     const gpxPoints = convertFunc(JSON.stringify(streams));
@@ -311,7 +323,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 } catch (error) {
                     console.error("Model oluşturma hatası:", error);
                     status.textContent = `Bir hata oluştu: ${error.message}. Lütfen sayfayı yenileyin.`;
-                    modelSelectionBox.style.display = 'block'; // Hata olursa seçim ekranına geri dön
+                    modelSelectionBox.style.display = 'block';
                 } finally {
                     loader.style.display = 'none';
                 }
@@ -320,7 +332,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
             async function handleLogin() {
                 loginButton.style.display = 'none';
                 loginBox.style.display = 'none';
-                status.textContent = "Tüm antrenmanlarınız Strava'dan çekiliyor...";
+                status.textContent = "Tüm koşu antrenmanlarınız Strava'dan çekiliyor...";
                 loader.style.display = 'block';
                 try {
                     const token = localStorage.getItem('strava_token');
@@ -348,7 +360,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 }
             }
             
-            // ---- Olay Dinleyicileri (Event Listeners) ----
             roadModelBtn.onclick = () => createModelForType(roadRuns, 'Yol');
             trailModelBtn.onclick = () => createModelForType(trailRuns, 'Patika');
             loginButton.onclick = () => { window.location.href = '/login'; };
@@ -384,8 +395,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 reader.readAsText(raceFile);
             };
 
-            // ---- Başlangıç ----
-            
             await initializePyodide();
 
             const token = localStorage.getItem('strava_token');
