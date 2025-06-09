@@ -115,8 +115,14 @@ def get_activities():
                 print("Son sayfaya ulaşıldı. Döngü sonlandırılıyor.")
                 break
 
+        # DEĞİŞİKLİK: Frontend'e sport_type bilgisini de gönderiyoruz.
+        runs_with_type = [
+            {'id': act['id'], 'distance': act['distance'], 'sport_type': act.get('sport_type')}
+            for act in all_activities if act.get('sport_type') in ['Run', 'TrailRun', 'VirtualRun']
+        ]
+
         print("--- /get_activities isteği başarıyla tamamlandı ---")
-        return jsonify(all_activities)
+        return jsonify(runs_with_type)
 
     except requests.exceptions.Timeout:
         print("Hata: Strava API'den yanıt 10 saniye içinde gelmedi (Request Timeout).")
