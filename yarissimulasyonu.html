@@ -1,6 +1,8 @@
+<!-- Dosya Adı: yarissimulasyonu.html (YENİ VE DÜZELTİLMİŞ) -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+    <!-- ... (head ve style bölümleri öncekiyle aynı, değişiklik yok) ... -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Strava Yarış Simülatörü (Client-Side)</title>
@@ -23,16 +25,15 @@
     </style>
 </head>
 <body>
+    <!-- ... (body'nin HTML yapısı öncekiyle aynı, değişiklik yok) ... -->
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.05</h1>
-        
-        <div class="box" id="login-box">
+        <h1>Strava Yarış Simülatörü v1.06</h1>
+        <div class="box" id="login-box" style="display: none;">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
             <div class="controls">
                 <button id="login-button">Strava ile Bağlan</button>
             </div>
         </div>
-
         <div class="box" id="model-selection-box" style="display: none;">
             <h2>Adım 2: Model Tipini Seçin</h2>
             <p>Simülasyon için hangi performans modelini kullanmak istersiniz?</p>
@@ -41,14 +42,12 @@
                 <button id="trail-model-btn" class="model-btn trail">Patika Koşusu Modeli</button>
             </div>
         </div>
-
         <div class="box" id="model-display-box" style="display: none;">
             <h2 id="model-title"></h2>
             <p id="model-description"></p>
             <div id="model-graph"></div>
             <p id="formula-display" style="display: none;"></p>
         </div>
-        
         <div class="box" id="simulation-box" style="display: none;">
             <h2>Adım 3: Yarışı Simüle Edin</h2>
             <div class="simulation-controls">
@@ -61,13 +60,11 @@
                 <button id="simulate-button">Simülasyonu Başlat</button>
             </div>
         </div>
-
         <div class="box" id="result-box" style="display: none;">
             <h2>Simülasyon Sonucu</h2>
             <h3 id="estimated-time" style="text-align:center; color: #fc4c02;"></h3>
             <div id="result-graph"></div>
         </div>
-
         <div id="status"></div>
         <div id="loader"></div>
     </div>
@@ -140,7 +137,6 @@ def create_performance_model(gpx_points):
     fig.update_xaxes(range=[-30, 30]); fig.update_yaxes(autorange='reversed', tickvals=tick_vals, ticktext=tick_text)
     a, b, c = final_poly.coeffs; formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
     return final_poly.coeffs.tolist(), fig.to_json(), formula_string
-
 def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
     gpx = gpxpy.parse(race_gpx_string)
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
@@ -185,99 +181,47 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
     fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0, y=1.2, orientation="h"))
     return result_text, fig.to_json()
 `;
-
-        // --- JavaScript Bölümü Başlıyor ---
-
-        const STRAVA_CLIENT_ID = "28299"; // Kendi Client ID'nizi buraya girin
+        
+        // JavaScript Bölümü...
+        const STRAVA_CLIENT_ID = "28299";
         const STRAVA_API_URL = "https://www.strava.com/api/v3";
+        const elements = {
+            loader: document.getElementById('loader'), status: document.getElementById('status'), loginButton: document.getElementById('login-button'), loginBox: document.getElementById('login-box'), modelSelectionBox: document.getElementById('model-selection-box'), modelDisplayBox: document.getElementById('model-display-box'), simulationBox: document.getElementById('simulation-box'), resultBox: document.getElementById('result-box'), formulaDisplay: document.getElementById('formula-display'), roadModelBtn: document.getElementById('road-model-btn'), trailModelBtn: document.getElementById('trail-model-btn'), modelTitle: document.getElementById('model-title'), modelDescription: document.getElementById('model-description'), raceGpxInput: document.getElementById('race-gpx-input'), fatigueFactorInput: document.getElementById('fatigue-factor'), simulateButton: document.getElementById('simulate-button')
+        };
+        let performanceModelCoeffs = null, pyodide = null, roadRuns = [], trailRuns = [];
         
-        // Geri kalan tüm JavaScript kodu... (önceki yanıtla aynı, sadece loginButton.onclick değişti)
-        const loader = document.getElementById('loader');
-        const status = document.getElementById('status');
-        const loginButton = document.getElementById('login-button');
-        const loginBox = document.getElementById('login-box');
-        // ... (diğer elementler)
-        const modelSelectionBox = document.getElementById('model-selection-box');
-        const modelDisplayBox = document.getElementById('model-display-box');
-        const simulationBox = document.getElementById('simulation-box');
-        const resultBox = document.getElementById('result-box');
-        const formulaDisplay = document.getElementById('formula-display');
-        const roadModelBtn = document.getElementById('road-model-btn');
-        const trailModelBtn = document.getElementById('trail-model-btn');
-        const modelTitle = document.getElementById('model-title');
-        const modelDescription = document.getElementById('model-description');
-        const raceGpxInput = document.getElementById('race-gpx-input');
-        const fatigueFactorInput = document.getElementById('fatigue-factor');
-        const simulateButton = document.getElementById('simulate-button');
-
-        let performanceModelCoeffs = null;
-        let pyodide = null;
-        let roadRuns = [];
-        let trailRuns = [];
-        async function initializePyodide() { status.textContent = "Python ortamı hazırlanıyor..."; loader.style.display = 'block'; pyodide = await loadPyodide(); await pyodide.loadPackage(["numpy", "micropip"]); const micropip = pyodide.pyimport("micropip"); await micropip.install(['gpxpy', 'plotly', 'pandas']); pyodide.runPython(pythonCode); loader.style.display = 'none'; }
+        async function initializePyodide() { elements.status.textContent = "Python ortamı hazırlanıyor..."; elements.loader.style.display = 'block'; pyodide = await loadPyodide(); await pyodide.loadPackage(["numpy", "micropip"]); const micropip = pyodide.pyimport("micropip"); await micropip.install(['gpxpy', 'plotly', 'pandas']); pyodide.runPython(pythonCode); elements.loader.style.display = 'none'; }
         async function stravaFetch(endpoint, token) { const response = await fetch(`${STRAVA_API_URL}${endpoint}`, { headers: { 'Authorization': `Bearer ${token}` } }); if (!response.ok) { if (response.status === 401) { localStorage.removeItem('strava_token'); window.location.reload(); } throw new Error(`Strava API Hatası: ${response.statusText}`); } return response.json(); }
-        async function createModelForType(runs, modelType) { const minDist = 15000; const maxDist = 40000; const filteredRuns = runs.filter(run => run.distance >= minDist && run.distance <= maxDist); const latestRuns = filteredRuns.slice(0, 10); if (latestRuns.length < 3) { alert(`Model oluşturmak için 15-40 km aralığında yeterli ${modelType} koşusu bulunamadı (Bulunan: ${latestRuns.length}).`); return; } status.textContent = `${modelType} modeliniz için veriler çekiliyor...`; loader.style.display = 'block'; modelSelectionBox.style.display = 'none'; try { const token = localStorage.getItem('strava_token'); const streams = []; let count = 0; for (const run of latestRuns) { count++; status.textContent = `${modelType} verisi çekiliyor: ${count}/${latestRuns.length}`; const streamData = await stravaFetch(`/activities/${run.id}/streams?keys=time,latlng,altitude&key_by_type=true`, token); streams.push(streamData); } status.textContent = `Veriler analiz ediliyor...`; const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points'); const gpxPoints = convertFunc(JSON.stringify(streams)); const modelFunc = pyodide.globals.get('create_performance_model'); const [coeffs, modelFigJson, formulaString] = modelFunc(gpxPoints).toJs(); if (!coeffs) throw new Error("Performans modeli oluşturulamadı."); performanceModelCoeffs = coeffs; const modelFig = JSON.parse(modelFigJson); Plotly.newPlot('model-graph', modelFig.data, modelFig.layout, {responsive: true}); modelTitle.textContent = `${modelType} Performans Modeliniz`; modelDescription.textContent = `15-40 km arası son ${latestRuns.length} ${modelType.toLowerCase()} koşunuz analiz edilerek model oluşturuldu.`; formulaDisplay.textContent = formulaString; formulaDisplay.style.display = 'block'; status.textContent = "Modeliniz hazır. Yarışı simüle edebilirsiniz."; modelDisplayBox.style.display = 'block'; simulationBox.style.display = 'block'; setTimeout(() => Plotly.Plots.resize('model-graph'), 100); } catch (error) { console.error("Model oluşturma hatası:", error); status.textContent = `Bir hata oluştu: ${error.message}.`; modelSelectionBox.style.display = 'block'; } finally { loader.style.display = 'none'; } }
-        async function handleSuccessfulLogin(token) { loginBox.style.display = 'none'; status.textContent = "Tüm koşu antrenmanlarınız Strava'dan çekiliyor..."; loader.style.display = 'block'; try { const allActivities = []; let page = 1; while (true) { const activities = await stravaFetch(`/athlete/activities?page=${page}&per_page=100`, token); if (activities.length === 0 || page > 5) break; allActivities.push(...activities); page++; } roadRuns = allActivities.filter(act => act.sport_type === 'Run' || act.sport_type === 'VirtualRun'); trailRuns = allActivities.filter(act => act.sport_type === 'TrailRun'); roadModelBtn.textContent = `Yol Modeli (${roadRuns.length} koşu)`; trailModelBtn.textContent = `Patika Modeli (${trailRuns.length} koşu)`; status.textContent = "Lütfen kullanılacak modeli seçin."; modelSelectionBox.style.display = 'block'; } catch (error) { console.error("Veri yükleme hatası:", error); status.textContent = `Bir hata oluştu: ${error.message}.`; localStorage.removeItem('strava_token'); loginBox.style.display = 'block'; } finally { loader.style.display = 'none'; } }
-        roadModelBtn.onclick = () => createModelForType(roadRuns, 'Yol');
-        trailModelBtn.onclick = () => createModelForType(trailRuns, 'Patika');
+        async function createModelForType(runs, modelType) { const minDist = 15000; const maxDist = 40000; const filteredRuns = runs.filter(run => run.distance >= minDist && run.distance <= maxDist).slice(0, 10); if (filteredRuns.length < 3) { alert(`Model oluşturmak için 15-40 km aralığında yeterli ${modelType} koşusu bulunamadı (Bulunan: ${filteredRuns.length}).`); return; } elements.status.textContent = `${modelType} modeliniz için veriler çekiliyor...`; elements.loader.style.display = 'block'; elements.modelSelectionBox.style.display = 'none'; try { const token = localStorage.getItem('strava_token'); const streams = []; let count = 0; for (const run of filteredRuns) { count++; elements.status.textContent = `${modelType} verisi çekiliyor: ${count}/${filteredRuns.length}`; const streamData = await stravaFetch(`/activities/${run.id}/streams?keys=time,latlng,altitude&key_by_type=true`, token); streams.push(streamData); } elements.status.textContent = `Veriler analiz ediliyor...`; const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points'); const gpxPoints = convertFunc(JSON.stringify(streams)); const modelFunc = pyodide.globals.get('create_performance_model'); const [coeffs, modelFigJson, formulaString] = modelFunc(gpxPoints).toJs(); if (!coeffs) throw new Error("Performans modeli oluşturulamadı."); performanceModelCoeffs = coeffs; const modelFig = JSON.parse(modelFigJson); Plotly.newPlot('model-graph', modelFig.data, modelFig.layout, {responsive: true}); elements.modelTitle.textContent = `${modelType} Performans Modeliniz`; elements.modelDescription.textContent = `15-40 km arası son ${filteredRuns.length} ${modelType.toLowerCase()} koşunuz analiz edilerek model oluşturuldu.`; elements.formulaDisplay.textContent = formulaString; elements.formulaDisplay.style.display = 'block'; elements.status.textContent = "Modeliniz hazır. Yarışı simüle edebilirsiniz."; elements.modelDisplayBox.style.display = 'block'; elements.simulationBox.style.display = 'block'; setTimeout(() => Plotly.Plots.resize('model-graph'), 100); } catch (error) { console.error("Model oluşturma hatası:", error); elements.status.textContent = `Bir hata oluştu: ${error.message}.`; elements.modelSelectionBox.style.display = 'block'; } finally { elements.loader.style.display = 'none'; } }
+        async function handleSuccessfulLogin(token) { elements.loginBox.style.display = 'none'; elements.status.textContent = "Tüm koşu antrenmanlarınız Strava'dan çekiliyor..."; elements.loader.style.display = 'block'; try { const allActivities = []; let page = 1; while (true) { const activities = await stravaFetch(`/athlete/activities?page=${page}&per_page=100`, token); if (activities.length === 0 || page > 5) break; allActivities.push(...activities); page++; } roadRuns = allActivities.filter(act => act.sport_type === 'Run' || act.sport_type === 'VirtualRun'); trailRuns = allActivities.filter(act => act.sport_type === 'TrailRun'); elements.roadModelBtn.textContent = `Yol Modeli (${roadRuns.length} koşu)`; elements.trailModelBtn.textContent = `Patika Modeli (${trailRuns.length} koşu)`; elements.status.textContent = "Lütfen kullanılacak modeli seçin."; elements.modelSelectionBox.style.display = 'block'; } catch (error) { console.error("Veri yükleme hatası:", error); elements.status.textContent = `Bir hata oluştu: ${error.message}.`; localStorage.removeItem('strava_token'); elements.loginBox.style.display = 'block'; } finally { elements.loader.style.display = 'none'; } }
         
-        loginButton.onclick = () => {
-            // *** SON VE KESİN DÜZELTME BURADA ***
-            // Strava'ya, tam olarak bu sayfanın adresini (ana sayfa değil) geri dönüş adresi olarak veriyoruz.
-            // Bu, URL'de # veya ? gibi kısımlar varsa bunları temizler.
-            const redirectUri = window.location.href.split('#')[0].split('?')[0];
+        elements.roadModelBtn.onclick = () => createModelForType(roadRuns, 'Yol');
+        elements.trailModelBtn.onclick = () => createModelForType(trailRuns, 'Patika');
+        
+        elements.loginButton.onclick = () => {
+            // *** YENİ ve EN SAĞLAM YÖNTEM ***
+            // 1. Kullanıcıyı nereye geri göndereceğimizi hafızaya alıyoruz.
+            localStorage.setItem('login_redirect_path', window.location.pathname);
             
-            // Şimdi Strava'ya, hem kayıtlı domain'e uyan hem de tam yolu içeren bu adresi gönderiyoruz.
+            // 2. Strava'ya, her zaman ana sayfaya (`index.html`) dönmesini söylüyoruz.
+            const redirectUri = window.location.origin; 
+            
             const authUrl = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&approval_prompt=auto&scope=activity:read_all`;
             window.location.href = authUrl;
         };
         
-        simulateButton.onclick = () => { /* ... aynı ... */ 
-            const raceFile = raceGpxInput.files[0];
-            const fatigue = parseFloat(fatigueFactorInput.value);
-            if (!raceFile) {
-                alert("Lütfen bir yarış GPX dosyası seçin.");
-                return;
-            }
-            status.textContent = "Yarış simüle ediliyor...";
-            loader.style.display = 'block';
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const raceGpxContent = e.target.result;
-                try {
-                    const simulateFunc = pyodide.globals.get('simulate_race');
-                    const [resultText, resultFigJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue).toJs();
-                    const resultFig = JSON.parse(resultFigJson);
-                    document.getElementById('estimated-time').textContent = resultText;
-                    Plotly.newPlot('result-graph', resultFig.data, resultFig.layout, {responsive: true});
-                    resultBox.style.display = 'block';
-                    setTimeout(() => Plotly.Plots.resize('result-graph'), 100);
-                } catch (error) {
-                    console.error("Simulation error:", error);
-                    status.textContent = `Simülasyon sırasında bir hata oluştu: ${error.message}`;
-                    alert("Simülasyon sırasında bir hata oluştu. Lütfen konsolu kontrol edin.");
-                } finally {
-                    loader.style.display = 'none';
-                }
-            };
-            reader.readAsText(raceFile);
-        };
+        elements.simulateButton.onclick = () => { const raceFile = elements.raceGpxInput.files[0]; const fatigue = parseFloat(elements.fatigueFactorInput.value); if (!raceFile) { alert("Lütfen bir yarış GPX dosyası seçin."); return; } elements.status.textContent = "Yarış simüle ediliyor..."; elements.loader.style.display = 'block'; const reader = new FileReader(); reader.onload = function(e) { const raceGpxContent = e.target.result; try { const simulateFunc = pyodide.globals.get('simulate_race'); const [resultText, resultFigJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue).toJs(); const resultFig = JSON.parse(resultFigJson); document.getElementById('estimated-time').textContent = resultText; Plotly.newPlot('result-graph', resultFig.data, resultFig.layout, {responsive: true}); elements.resultBox.style.display = 'block'; setTimeout(() => Plotly.Plots.resize('result-graph'), 100); } catch (error) { console.error("Simulation error:", error); elements.status.textContent = `Simülasyon sırasında bir hata oluştu: ${error.message}`; alert("Simülasyon sırasında bir hata oluştu."); } finally { elements.loader.style.display = 'none'; } }; reader.readAsText(raceFile); };
         
         async function initializeApp() {
+            // Bu fonksiyon artık sadece bu sayfayı ilgilendiriyor.
+            // Ana sayfadaki script token'ı zaten yakalayıp kaydetti.
             await initializePyodide();
-            const urlHash = window.location.hash;
-            let accessToken = localStorage.getItem('strava_token');
-            if (urlHash.includes("access_token")) {
-                const params = new URLSearchParams(urlHash.substring(1));
-                accessToken = params.get("access_token");
-                localStorage.setItem('strava_token', accessToken);
-                window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-            }
+            const accessToken = localStorage.getItem('strava_token');
             if (accessToken) {
                 handleSuccessfulLogin(accessToken);
             } else {
-                status.textContent = "Başlamak için Strava hesabınıza bağlanın.";
-                loginBox.style.display = 'block';
+                elements.status.textContent = "Başlamak için Strava hesabınıza bağlanın.";
+                elements.loginBox.style.display = 'block';
             }
         }
 
