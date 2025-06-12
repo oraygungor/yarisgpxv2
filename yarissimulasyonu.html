@@ -330,7 +330,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 const twoMonthsAgo = new Date();
                 twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
                 const MIN_DISTANCE = 13000; // 13 km
-                const MAX_RUNS_FOR_MODEL = 20;
+                const MAX_RUNS_FOR_MODEL = 40;
 
                 const filteredRuns = allActivities
                     .filter(act => 
