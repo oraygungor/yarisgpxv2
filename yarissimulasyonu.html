@@ -14,8 +14,6 @@
         .controls, .simulation-controls { text-align: center; margin: 20px 0; }
         button, input[type="file"], input[type="number"], select { padding: 10px 15px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc; font-size: 16px; }
         #login-button { background-color: #fc4c02; color: white; border-color: #fc4c02; font-weight: bold; }
-        .model-btn { background-color: #1a73e8; color: white; margin: 0 10px; }
-        .model-btn.trail { background-color: #1e8e3e; }
         #loader { border: 6px solid #f3f3f3; border-top: 6px solid #fc4c02; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #status { text-align: center; font-style: italic; color: #606770; min-height: 2em; }
@@ -24,27 +22,18 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.03</h1>
+        <h1>Strava Yarış Simülatörü v1.04</h1>
         
-        <div class="box" id="login-box" style="display: none;">
+        <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
             <div class="controls">
                 <button id="login-button">Strava ile Bağlan</button>
             </div>
         </div>
 
-        <div class="box" id="model-selection-box" style="display: none;">
-            <h2>Adım 2: Model Tipini Seçin</h2>
-            <p>Simülasyon için hangi performans modelini kullanmak istersiniz?</p>
-            <div class="controls">
-                <button id="road-model-btn" class="model-btn">Yol Koşusu Modeli</button>
-                <button id="trail-model-btn" class="model-btn trail">Patika Koşusu Modeli</button>
-            </div>
-        </div>
-
-        <div class="box" id="model-display-box" style="display: none;">
-            <h2 id="model-title"></h2>
-            <p id="model-description"></p>
+        <div class="box" id="model-box" style="display: none;">
+            <h2>Adım 2: Performans Modeliniz</h2>
+            <p>15-40 km arası son 10 koşunuz analiz edilerek kişisel Eğim/Pace modeliniz otomatik olarak oluşturuldu.</p>
             <div id="model-graph"></div>
             <p id="formula-display" style="display: none;"></p>
         </div>
@@ -78,42 +67,38 @@ import gpxpy, json, numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import pandas as pd
+
 def format_pace_mmss(seconds_per_km):
-    if seconds_per_km <= 0: return "00:00"
+    if seconds_per_km <= 0:
+        return "00:00"
     minutes = int(seconds_per_km // 60)
     seconds = int(seconds_per_km % 60)
     return f"{minutes:02d}:{seconds:02d}"
+
 def convert_streams_to_gpx_points(streams_json):
     streams = json.loads(streams_json)
     all_points = []
-    base_time = datetime.now() 
+    start_time = datetime.now()
     for stream_set in streams:
-        activity_start_time = base_time
         latlngs = stream_set.get('latlng', {}).get('data', [])
         alts = stream_set.get('altitude', {}).get('data', [])
         times = stream_set.get('time', {}).get('data', [])
         for i in range(len(latlngs)):
-            point_time = activity_start_time + timedelta(seconds=times[i]) if i < len(times) else None
-            all_points.append(gpxpy.gpx.GPXTrackPoint(latitude=latlngs[i][0], longitude=latlngs[i][1], elevation=alts[i] if i < len(alts) else None, time=point_time))
+            all_points.append(gpxpy.gpx.GPXTrackPoint(
+                latitude=latlngs[i][0], longitude=latlngs[i][1],
+                elevation=alts[i] if i < len(alts) else None,
+                time=start_time + timedelta(seconds=times[i]) if i < len(times) else None
+            ))
     return all_points
+
 def create_performance_model(gpx_points):
     segments_data = []
     segment_length = 50.0
     outlier_threshold = 1.5
     if len(gpx_points) < 2: return None, "{}", ""
-    gpx_for_smoothing = gpxpy.gpx.GPX()
-    track = gpxpy.gpx.GPXTrack()
-    segment = gpxpy.gpx.GPXTrackSegment()
-    segment.points.extend(gpx_points)
-    track.segments.append(segment)
-    gpx_for_smoothing.tracks.append(track)
-    if any(p.elevation is not None for p in gpx_points):
-        gpx_for_smoothing.smooth(vertical=True, remove_extremes=True)
-    
-    smoothed_points = gpx_for_smoothing.tracks[0].segments[0].points
-    segment_start_point, cumulative_distance = smoothed_points[0], 0.0
-    for i in range(1, len(smoothed_points)):
-        prev_point, current_point = smoothed_points[i-1], smoothed_points[i]
+    segment_start_point, cumulative_distance = gpx_points[0], 0.0
+    for i in range(1, len(gpx_points)):
+        prev_point, current_point = gpx_points[i-1], gpx_points[i]
         delta_distance = current_point.distance_2d(prev_point)
         if delta_distance is None or delta_distance == 0: continue
         cumulative_distance += delta_distance
@@ -122,123 +107,227 @@ def create_performance_model(gpx_points):
             elevation_delta = current_point.elevation - segment_start_point.elevation if current_point.elevation and segment_start_point.elevation else 0
             slope = (elevation_delta / cumulative_distance) * 100 if cumulative_distance > 0 else 0
             pace_sec_per_km = (time_delta.total_seconds() / cumulative_distance) * 1000 if time_delta and time_delta.total_seconds() > 0 else 0
-            if 120 < pace_sec_per_km < 4000: segments_data.append({'slope': slope, 'pace_sec': pace_sec_per_km})
+            if 120 < pace_sec_per_km < 4000:
+                segments_data.append({'slope': slope, 'pace_sec': pace_sec_per_km})
             segment_start_point, cumulative_distance = current_point, 0.0
     if not segments_data: return None, "{}", ""
-    all_slopes = np.array([d['slope'] for d in segments_data]); all_paces = np.array([d['pace_sec'] for d in segments_data]); kept_indices = np.arange(len(all_slopes))
+    
+    all_slopes = np.array([d['slope'] for d in segments_data])
+    all_paces = np.array([d['pace_sec'] for d in segments_data])
+    kept_indices = np.arange(len(all_slopes))
+    
     for _ in range(10):
         fit_slopes, fit_paces = all_slopes[kept_indices], all_paces[kept_indices]
         if len(fit_slopes) < 3: break
-        poly = np.poly1d(np.polyfit(fit_slopes, fit_paces, 2)); predicted_paces = poly(all_slopes)
+        poly = np.poly1d(np.polyfit(fit_slopes, fit_paces, 2))
+        predicted_paces = poly(all_slopes)
         is_not_outlier_mask = (all_paces > predicted_paces / outlier_threshold) & (all_paces < predicted_paces * outlier_threshold)
         new_kept_indices = np.where(is_not_outlier_mask)[0]
         if len(kept_indices) - len(new_kept_indices) == 0: break
         kept_indices = new_kept_indices
-    final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2)); fig = go.Figure()
-    marker_slopes = all_slopes[kept_indices]; marker_paces = all_paces[kept_indices]
-    clean_marker_custom_data = [format_pace_mmss(p) for p in marker_paces]
-    fig.add_trace(go.Scatter(x=marker_slopes, y=marker_paces, mode='markers', name='Antrenman Verileri', customdata=clean_marker_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Pace: %{customdata}/km<extra></extra>'))
-    x_smooth = np.linspace(-30, 30, 200); y_smooth = final_poly(x_smooth); line_custom_data = [format_pace_mmss(p) for p in y_smooth]
-    fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Performans Modelin', line=dict(color='red'), customdata=line_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Model Pace: %{customdata}/km<extra></extra>'))
     
-    y_range_calc_points = final_poly([-35, 35]); y_min_model, y_max_model = y_range_calc_points.min(), y_range_calc_points.max()
-    y_buffer = 20 # saniye cinsinden tampon
+    final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2))
+    
+    fig = go.Figure()
+
+    marker_slopes = all_slopes[kept_indices]
+    marker_paces = all_paces[kept_indices]
+    
+    clean_marker_custom_data = [format_pace_mmss(p) for p in marker_paces]
+    fig.add_trace(go.Scatter(
+        x=marker_slopes, y=marker_paces, mode='markers', name='Antrenman Verileri',
+        customdata=clean_marker_custom_data,
+        hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Pace: %{customdata}/km<extra></extra>'
+    ))
+
+    x_smooth = np.linspace(-30, 30, 200)
+    y_smooth = final_poly(x_smooth)
+    line_custom_data = [format_pace_mmss(p) for p in y_smooth]
+    fig.add_trace(go.Scatter(
+        x=x_smooth, y=y_smooth, mode='lines', name='Performans Modelin', line=dict(color='red'),
+        customdata=line_custom_data,
+        hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Model Pace: %{customdata}/km<extra></extra>'
+    ))
+    
+    # --- Y EKSENİ DİNAMİK AYARLAMA (DEĞİŞTİRİLEN BÖLÜM) ---
+    a, b, c = final_poly.coeffs
+    vertex_slope = -b / (2 * a) if a != 0 else 0
+    slopes_to_evaluate = [-35, 35]
+    if -35 < vertex_slope < 35:
+        slopes_to_evaluate.append(vertex_slope)
+    pace_values = final_poly(slopes_to_evaluate)
+    y_min_model = pace_values.min()
+    y_max_model = pace_values.max()
+    y_buffer = (y_max_model - y_min_model) * 0.05
     y_axis_min_range = y_min_model - y_buffer
     y_axis_max_range = y_max_model + y_buffer
-    y_min_tick = int(y_axis_min_range // 30) * 30; y_max_tick = (int(y_axis_max_range // 30) + 1) * 30
-    tick_vals = np.arange(max(0, y_min_tick), y_max_tick, 30); tick_text = [format_pace_mmss(s) for s in tick_vals]
-    
-    fig.update_layout(title="Kişisel Eğim/Pace Performans Modelin", xaxis_title="Eğim (%)", yaxis_title="Pace (MM:SS/km)")
+    y_min_tick = int(y_axis_min_range // 30) * 30
+    y_max_tick = (int(y_axis_max_range // 30) + 1) * 30
+    tick_vals = np.arange(max(0, y_min_tick), y_max_tick, 30)
+    tick_text = [format_pace_mmss(s) for s in tick_vals]
+    fig.update_layout(
+        title="Kişisel Eğim/Pace Performans Modelin", 
+        xaxis_title="Eğim (%)", 
+        yaxis_title="Pace (MM:SS/km)"
+    )
     fig.update_xaxes(range=[-30, 30])
-    fig.update_yaxes(range=[y_axis_max_range, y_axis_min_range], autorange=False, tickvals=tick_vals, ticktext=tick_text)
+    fig.update_yaxes(
+        autorange=False, 
+        range=[y_axis_max_range, y_axis_min_range],
+        tickvals=tick_vals, 
+        ticktext=tick_text
+    )
+    # --- DEĞİŞİKLİK SONU ---
     
-    a, b, c = final_poly.coeffs; formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
+    a, b, c = final_poly.coeffs
+    formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
+
     return final_poly.coeffs.tolist(), fig.to_json(), formula_string
+
+
 def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
     gpx = gpxpy.parse(race_gpx_string)
-    if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
-        gpx.smooth(vertical=True, remove_extremes=True)
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
-    if not race_points: return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json()
+    
+    if not race_points:
+        return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json()
+
     perf_model = np.poly1d(poly_coeffs)
-    fatigue_factor = 1.0; total_time_sec = 0; cumulative_dist_m = 0; segment_length = 20.0
-    profile_dist_km = [0]; profile_ele = [race_points[0].elevation or 0]; raw_pace_sec_km = []
-    segment_start_point = race_points[0]; cumulative_segment_dist = 0
+    fatigue_factor = 1.0
+    total_time_sec = 0
+    cumulative_dist_m = 0
+    segment_length = 20.0
+    
+    profile_dist_km = [0]
+    profile_ele = [race_points[0].elevation or 0]
+    raw_pace_sec_km = []
+    
+    segment_start_point = race_points[0]
+    cumulative_segment_dist = 0
+    
     for i in range(1, len(race_points)):
         prev_point, current_point = race_points[i-1], race_points[i]
         delta_dist = current_point.distance_2d(prev_point)
         if delta_dist is None or delta_dist == 0: continue
+        
         cumulative_dist_m += delta_dist
         cumulative_segment_dist += delta_dist
+
         if cumulative_segment_dist >= segment_length:
-            if cumulative_dist_m > 20000 and (cumulative_dist_m // 20000 > (cumulative_dist_m - cumulative_segment_dist) // 20000): fatigue_factor *= (1 + fatigue_percent / 100)
+            if cumulative_dist_m > 20000 and (cumulative_dist_m // 20000 > (cumulative_dist_m - cumulative_segment_dist) // 20000):
+                fatigue_factor *= (1 + fatigue_percent / 100)
+
             ele_delta = 0
-            if current_point.elevation is not None and segment_start_point.elevation is not None: ele_delta = current_point.elevation - segment_start_point.elevation
+            if current_point.elevation is not None and segment_start_point.elevation is not None:
+                ele_delta = current_point.elevation - segment_start_point.elevation
+
             slope = (ele_delta / cumulative_segment_dist) * 100 if cumulative_segment_dist > 0 else 0
             capped_slope = np.clip(slope, -35, 35)
             predicted_pace_sec_km = perf_model(capped_slope) * fatigue_factor
+            
             segment_time = predicted_pace_sec_km * (cumulative_segment_dist / 1000)
             total_time_sec += segment_time
+            
             profile_dist_km.append(cumulative_dist_m / 1000)
             profile_ele.append(current_point.elevation if current_point.elevation is not None else profile_ele[-1])
             raw_pace_sec_km.append(predicted_pace_sec_km)
-            segment_start_point = current_point; cumulative_segment_dist = 0
-    total_hours = int(total_time_sec // 3600); total_minutes = int((total_time_sec % 3600) // 60); total_seconds = int(total_time_sec % 60)
+
+            segment_start_point = current_point
+            cumulative_segment_dist = 0
+            
+    total_hours = int(total_time_sec // 3600)
+    total_minutes = int((total_time_sec % 3600) // 60)
+    total_seconds = int(total_time_sec % 60)
     result_text = f"Tahmini Bitiş Süresi: {total_hours:02d}:{total_minutes:02d}:{total_seconds:02d}"
-    pace_series = pd.Series(raw_pace_sec_km); moving_avg_pace_sec_km = pace_series.rolling(window=15, min_periods=1).mean().tolist()
+    
+    pace_series = pd.Series(raw_pace_sec_km)
+    moving_avg_pace_sec_km = pace_series.rolling(window=15, min_periods=1).mean().tolist()
+    
     fig = go.Figure()
+    
     formatted_avg_paces = [format_pace_mmss(p) for p in moving_avg_pace_sec_km]
     ele_custom_data = ["-"] + formatted_avg_paces
     pace_custom_data = np.stack((np.array(formatted_avg_paces), np.array(profile_ele[1:])), axis=-1)
-    fig.add_trace(go.Scatter(x=profile_dist_km, y=profile_ele, name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'), customdata=ele_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata}/km<extra></extra>'))
-    fig.add_trace(go.Scatter(x=profile_dist_km[1:], y=[p / 60 for p in moving_avg_pace_sec_km], name='Tahmini Ort. Pace', line=dict(color='orange'), customdata=pace_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Yükseklik: %{customdata[1]:.0f} m<extra></extra>'))
+
+    fig.add_trace(go.Scatter(
+        x=profile_dist_km, y=profile_ele, name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'),
+        customdata=ele_custom_data,
+        hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata}/km<extra></extra>'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=profile_dist_km[1:], y=[p / 60 for p in moving_avg_pace_sec_km], name='Tahmini Ort. Pace', line=dict(color='orange'),
+        customdata=pace_custom_data,
+        hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Yükseklik: %{customdata[1]:.0f} m<extra></extra>'
+    ))
+
     y_tickvals_min, y_ticktext_str = [], []
     if moving_avg_pace_sec_km:
-        y_min_sec = int(min(moving_avg_pace_sec_km) // 30) * 30; y_max_sec = (int(max(moving_avg_pace_sec_km) // 30) + 1) * 30
+        y_min_sec = int(min(moving_avg_pace_sec_km) // 30) * 30
+        y_max_sec = (int(max(moving_avg_pace_sec_km) // 30) + 1) * 30
         y_tickvals_sec = np.arange(max(0, y_min_sec), y_max_sec, 30)
-        y_ticktext_str = [format_pace_mmss(s) for s in y_tickvals_sec]; y_tickvals_min = [s / 60 for s in y_tickvals_sec]
-    fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0, y=1.2, orientation="h"))
+        y_ticktext_str = [format_pace_mmss(s) for s in y_tickvals_sec]
+        y_tickvals_min = [s / 60 for s in y_tickvals_sec]
+
+    fig.update_layout(
+        title="Yarış Simülasyonu Profili",
+        xaxis_title="Mesafe (km)",
+        yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str),
+        yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'),
+        legend=dict(x=0, y=1.2, orientation="h")
+    )
+
     return result_text, fig.to_json()
 `;
 
-        const elements = {
-            loader: document.getElementById('loader'), status: document.getElementById('status'), loginButton: document.getElementById('login-button'), loginBox: document.getElementById('login-box'), modelSelectionBox: document.getElementById('model-selection-box'), modelDisplayBox: document.getElementById('model-display-box'), simulationBox: document.getElementById('simulation-box'), resultBox: document.getElementById('result-box'), formulaDisplay: document.getElementById('formula-display'), roadModelBtn: document.getElementById('road-model-btn'), trailModelBtn: document.getElementById('trail-model-btn'), modelTitle: document.getElementById('model-title'), modelDescription: document.getElementById('model-description'), raceGpxInput: document.getElementById('race-gpx-input'), fatigueFactorInput: document.getElementById('fatigue-factor'), simulateButton: document.getElementById('simulate-button')
-        };
-        let performanceModelCoeffs = null, pyodide = null, roadRuns = [], trailRuns = [];
-        
-        async function initializePyodide() { 
-            elements.status.textContent = "Python ortamı hazırlanıyor..."; 
-            elements.loader.style.display = 'block'; 
-            pyodide = await loadPyodide(); 
-            await pyodide.loadPackage(["numpy", "micropip"]); 
-            const micropip = pyodide.pyimport("micropip"); 
-            await micropip.install(['gpxpy', 'plotly', 'pandas']); 
-            pyodide.runPython(pythonCode); 
-            elements.loader.style.display = 'none'; 
-        }
-        
-        // --- BU FONKSİYONUN TAMAMI GÜNCELLENDİ ---
-        async function createModelForType(runs, modelType) {
-            const twoMonthsAgo = new Date();
-            twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-            const MIN_DISTANCE = 13000;
-            const MAX_RUNS_FOR_MODEL = 20;
+        async function main() {
+            // Elementleri seç
+            const loader = document.getElementById('loader');
+            const status = document.getElementById('status');
+            const loginButton = document.getElementById('login-button');
+            const raceGpxInput = document.getElementById('race-gpx-input');
+            const fatigueFactorInput = document.getElementById('fatigue-factor');
+            const simulateButton = document.getElementById('simulate-button');
+            
+            const modelBox = document.getElementById('model-box');
+            const simulationBox = document.getElementById('simulation-box');
+            const resultBox = document.getElementById('result-box');
+            const formulaDisplay = document.getElementById('formula-display');
 
-            const filteredRuns = runs
-                .filter(run => new Date(run.start_date) > twoMonthsAgo && run.distance > MIN_DISTANCE)
-                .sort((a, b) => new Date(b.start_date) - new Date(a.start_date))
-                .slice(0, MAX_RUNS_FOR_MODEL);
+            // Global değişkenler
+            let performanceModelCoeffs = null;
+            let pyodide = null;
 
-            if (filteredRuns.length < 3) {
-                alert(`Model oluşturmak için son 2 ayda 13km üzeri yeterli ${modelType} koşusu bulunamadı (En az 3 koşu gerekli, bulunan: ${filteredRuns.length}).`);
-                return;
+            // ---- Ana Fonksiyonlar ----
+
+            async function initializePyodide() {
+                status.textContent = "Python ortamı hazırlanıyor...";
+                loader.style.display = 'block';
+                pyodide = await loadPyodide();
+                await pyodide.loadPackage(["numpy", "micropip"]);
+                const micropip = pyodide.pyimport("micropip");
+                await micropip.install(['gpxpy', 'plotly', 'pandas']);
+                pyodide.runPython(pythonCode);
+                loader.style.display = 'none';
             }
 
-            elements.status.textContent = `${modelType} modeliniz için veriler çekiliyor...`;
-            elements.loader.style.display = 'block';
-            elements.modelSelectionBox.style.display = 'none';
+            async function createModelAutomatically(allActivities) {
+                const minDist = 15000; // 15 km
+                const maxDist = 40000; // 40 km
 
-            try {
+                const filteredRuns = allActivities
+                    .filter(act => act.type === 'Run' && act.distance >= minDist && act.distance <= maxDist)
+                    .slice(0, 10); // En son 10 koşuyu al
+
+                if (filteredRuns.length < 3) {
+                    throw new Error(`Model oluşturmak için 15-40 km aralığında yeterli koşu bulunamadı (Bulunan: ${filteredRuns.length}).`);
+                }
+                
+                status.textContent = `15-40 km aralığındaki son ${filteredRuns.length} koşu analiz edilerek model oluşturuluyor...`;
+                loader.style.display = 'block';
+                formulaDisplay.style.display = 'none';
+                simulationBox.style.display = 'none';
+                
                 const token = localStorage.getItem('strava_token');
                 const activityIds = filteredRuns.map(run => run.id);
 
@@ -247,143 +336,118 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify({ activity_ids: activityIds })
                 });
-                if (!response.ok) throw new Error(`Sunucu Hatası: Aktivitelerin detay verileri çekilemedi (${response.statusText})`);
+
+                if (!response.ok) {
+                    throw new Error(`Aktivite verileri çekilemedi: ${response.statusText}`);
+                }
                 const streams = await response.json();
                 
-                // Hibrit Nabız Hesaplama
-                const allHeartRates = [];
-                filteredRuns.forEach((run, index) => {
-                    if (run.average_heartrate && run.average_heartrate > 0) {
-                        allHeartRates.push(run.average_heartrate);
-                    } else {
-                        const stream = streams[index];
-                        if (stream && stream.heartrate && stream.heartrate.data && stream.heartrate.data.length > 0) {
-                            const hrStream = stream.heartrate.data;
-                            const streamAvg = hrStream.reduce((sum, val) => sum + val, 0) / hrStream.length;
-                            allHeartRates.push(streamAvg);
-                        }
-                    }
-                });
-
-                let avgHeartRateText = "Ortalama nabız verisi bulunamadı.";
-                if (allHeartRates.length > 0) {
-                    const avgHeartRate = allHeartRates.reduce((sum, hr) => sum + hr, 0) / allHeartRates.length;
-                    avgHeartRateText = `Bu model, ortalama <b>${avgHeartRate.toFixed(0)} bpm</b> nabız ile koşulan antrenmanlara dayanmaktadır.`;
-                }
-                
-                elements.status.textContent = `Veriler analiz ediliyor...`;
                 const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points');
                 const gpxPoints = convertFunc(JSON.stringify(streams));
+                
                 const modelFunc = pyodide.globals.get('create_performance_model');
                 const [coeffs, modelFigJson, formulaString] = modelFunc(gpxPoints).toJs();
-                if (!coeffs) throw new Error("Performans modeli oluşturulamadı.");
                 
+                if (!coeffs) {
+                    throw new Error("Performans modeli oluşturulamadı. Yeterli segment verisi bulunamadı.");
+                }
+
                 performanceModelCoeffs = coeffs;
                 const modelFig = JSON.parse(modelFigJson);
                 Plotly.newPlot('model-graph', modelFig.data, modelFig.layout, {responsive: true});
-                elements.modelTitle.textContent = `${modelType} Performans Modeliniz`;
-                elements.modelDescription.innerHTML = `Son 2 ay içerisindeki 13km üzeri en son ${filteredRuns.length} adet ${modelType.toLowerCase()} koşunuz analiz edildi. <br> ${avgHeartRateText}`;
-                elements.formulaDisplay.textContent = formulaString;
-                elements.formulaDisplay.style.display = 'block';
-                elements.status.textContent = "Modeliniz hazır. Yarışı simüle edebilirsiniz.";
-                elements.modelDisplayBox.style.display = 'block';
-                elements.simulationBox.style.display = 'block';
-                setTimeout(() => Plotly.Plots.resize('model-graph'), 100);
-            } catch (error) {
-                console.error("Model oluşturma hatası:", error);
-                elements.status.textContent = `Bir hata oluştu: ${error.message}.`;
-                elements.modelSelectionBox.style.display = 'block';
-            } finally {
-                elements.loader.style.display = 'none';
-            }
-        }
-        
-        function logoutAndShowLogin(errorMessage) {
-            localStorage.removeItem('strava_token');
-            elements.loginBox.style.display = 'block';
-            elements.modelSelectionBox.style.display = 'none';
-            elements.modelDisplayBox.style.display = 'none';
-            elements.simulationBox.style.display = 'none';
-            elements.resultBox.style.display = 'none';
-            elements.status.textContent = errorMessage || "Lütfen önce giriş yapın.";
-        }
-        
-        async function handleSuccessfulLogin(token) {
-            elements.loginBox.style.display = 'none';
-            elements.status.textContent = "Tüm koşu antrenmanlarınız Strava'dan çekiliyor...";
-            elements.loader.style.display = 'block';
-            try {
-                const response = await fetch('/api/get_activities', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
                 
-                if (!response.ok) {
-                    if (response.status === 401) throw new Error("Authorization Error"); 
-                    throw new Error(`Sunucu Hatası (${response.status})`);
-                }
-
-                const allActivities = await response.json();
-                roadRuns = allActivities.filter(act => act.sport_type === 'Run' || act.sport_type === 'VirtualRun');
-                trailRuns = allActivities.filter(act => act.sport_type === 'TrailRun');
-                elements.roadModelBtn.textContent = `Yol Modeli (${roadRuns.length} koşu)`;
-                elements.trailModelBtn.textContent = `Patika Modeli (${trailRuns.length} koşu)`;
-                elements.status.textContent = "Lütfen kullanılacak modeli seçin.";
-                elements.modelSelectionBox.style.display = 'block';
-            } catch (error) {
-                console.error("Veri yükleme hatası:", error);
-                if (error.message === "Authorization Error") {
-                    logoutAndShowLogin("Oturumunuz geçersiz veya süresi dolmuş. Lütfen tekrar bağlanın.");
-                } else {
-                    logoutAndShowLogin(`Aktiviteler alınırken bir hata oluştu: ${error.message}.`);
-                }
-            } finally {
-                elements.loader.style.display = 'none';
+                formulaDisplay.textContent = formulaString;
+                formulaDisplay.style.display = 'block';
+                
+                status.textContent = "Performans modeliniz oluşturuldu. Şimdi yarışı simüle edebilirsiniz.";
+                modelBox.style.display = 'block';
+                simulationBox.style.display = 'block';
+                setTimeout(() => Plotly.Plots.resize('model-graph'), 100);
             }
-        }
-        
-        elements.roadModelBtn.onclick = () => createModelForType(roadRuns, 'Yol');
-        elements.trailModelBtn.onclick = () => createModelForType(trailRuns, 'Patika');
-        elements.loginButton.onclick = () => { window.location.href = '/login'; };
-        
-        elements.simulateButton.onclick = () => {
-            const raceFile = elements.raceGpxInput.files[0];
-            const fatigue = parseFloat(elements.fatigueFactorInput.value);
-            if (!raceFile) { alert("Lütfen bir yarış GPX dosyası seçin."); return; }
-            elements.status.textContent = "Yarış simüle ediliyor...";
-            elements.loader.style.display = 'block';
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const raceGpxContent = e.target.result;
+            
+            async function handleLogin() {
+                loginButton.style.display = 'none';
+                status.textContent = "Tüm antrenmanlarınız Strava'dan çekiliyor...";
+                loader.style.display = 'block';
                 try {
-                    const simulateFunc = pyodide.globals.get('simulate_race');
-                    const [resultText, resultFigJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue).toJs();
-                    const resultFig = JSON.parse(resultFigJson);
-                    document.getElementById('estimated-time').textContent = resultText;
-                    Plotly.newPlot('result-graph', resultFig.data, resultFig.layout, {responsive: true});
-                    elements.resultBox.style.display = 'block';
-                    setTimeout(() => Plotly.Plots.resize('result-graph'), 100);
+                    const token = localStorage.getItem('strava_token');
+                    const response = await fetch('/api/get_activities', { 
+                        headers: { 'Authorization': `Bearer ${token}` } 
+                    });
+
+                    if (response.status === 401) {
+                        localStorage.removeItem('strava_token');
+                        status.textContent = "Oturum süreniz doldu. Lütfen tekrar bağlanın.";
+                        loginButton.style.display = 'block';
+                        modelBox.style.display = 'none';
+                        throw new Error("Unauthorized");
+                    }
+                    if (!response.ok) throw new Error(`API Hatası: ${response.status} ${response.statusText}`);
+                    
+                    const allActivities = await response.json();
+                    await createModelAutomatically(allActivities);
+
                 } catch (error) {
-                    console.error("Simulation error:", error);
-                    elements.status.textContent = `Simülasyon sırasında bir hata oluştu: ${error.message}`;
-                    alert("Simülasyon sırasında bir hata oluştu.");
+                    if (error.message !== "Unauthorized") {
+                        console.error("Veri yükleme/Model oluşturma hatası:", error);
+                        status.textContent = `Bir hata oluştu: ${error.message}. Lütfen sayfayı yenileyin.`;
+                        localStorage.removeItem('strava_token');
+                        loginButton.style.display = 'block';
+                        modelBox.style.display = 'none';
+                    }
                 } finally {
-                    elements.loader.style.display = 'none';
+                    loader.style.display = 'none';
                 }
+            }
+            
+            simulateButton.onclick = () => {
+                const raceFile = raceGpxInput.files[0];
+                const fatigue = parseFloat(fatigueFactorInput.value);
+                if (!raceFile) {
+                    alert("Lütfen bir yarış GPX dosyası seçin.");
+                    return;
+                }
+                status.textContent = "Yarış simüle ediliyor...";
+                loader.style.display = 'block';
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const raceGpxContent = e.target.result;
+                    try {
+                        const simulateFunc = pyodide.globals.get('simulate_race');
+                        const [resultText, resultFigJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue).toJs();
+                        const resultFig = JSON.parse(resultFigJson);
+                        document.getElementById('estimated-time').textContent = resultText;
+                        Plotly.newPlot('result-graph', resultFig.data, resultFig.layout, {responsive: true});
+                        resultBox.style.display = 'block';
+                        setTimeout(() => Plotly.Plots.resize('result-graph'), 100);
+                    } catch (error) {
+                        console.error("Simulation error:", error);
+                        status.textContent = `Simülasyon sırasında bir hata oluştu: ${error.message}`;
+                        alert("Simülasyon sırasında bir hata oluştu. Lütfen konsolu kontrol edin.");
+                    } finally {
+                        loader.style.display = 'none';
+                    }
+                };
+                reader.readAsText(raceFile);
             };
-            reader.readAsText(raceFile);
-        };
-        
-        async function initializeApp() {
+
+            // ---- Başlangıç ----
+            
             await initializePyodide();
+
             const token = localStorage.getItem('strava_token');
             if (token) {
-                handleSuccessfulLogin(token);
+                handleLogin();
             } else {
-                logoutAndShowLogin();
+                status.textContent = "Başlamak için Strava hesabınıza bağlanın.";
+                loginButton.style.display = 'block';
+                loginBox.style.display = 'block';
             }
+
+            loginButton.onclick = () => { window.location.href = '/login'; };
         }
 
-        initializeApp();
+        main();
     </script>
 </body>
 </html>
