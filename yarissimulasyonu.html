@@ -24,7 +24,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.02</h1>
+        <h1>Strava Yarış Simülatörü v1.03</h1>
         
         <div class="box" id="login-box" style="display: none;">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -141,19 +141,15 @@ def create_performance_model(gpx_points):
     x_smooth = np.linspace(-30, 30, 200); y_smooth = final_poly(x_smooth); line_custom_data = [format_pace_mmss(p) for p in y_smooth]
     fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Performans Modelin', line=dict(color='red'), customdata=line_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Model Pace: %{customdata}/km<extra></extra>'))
     
-    # --- Y EKSENİ DÜZELTMESİ ---
     y_range_calc_points = final_poly([-35, 35]); y_min_model, y_max_model = y_range_calc_points.min(), y_range_calc_points.max()
-    y_buffer = (y_max_model - y_min_model) * 0.05
+    y_buffer = 20 # saniye cinsinden tampon
     y_axis_min_range = y_min_model - y_buffer
     y_axis_max_range = y_max_model + y_buffer
-    
-    y_min_tick = int(y_axis_min_range // 30) * 30
-    y_max_tick = (int(y_axis_max_range // 30) + 1) * 30
+    y_min_tick = int(y_axis_min_range // 30) * 30; y_max_tick = (int(y_axis_max_range // 30) + 1) * 30
     tick_vals = np.arange(max(0, y_min_tick), y_max_tick, 30); tick_text = [format_pace_mmss(s) for s in tick_vals]
     
     fig.update_layout(title="Kişisel Eğim/Pace Performans Modelin", xaxis_title="Eğim (%)", yaxis_title="Pace (MM:SS/km)")
     fig.update_xaxes(range=[-30, 30])
-    # Y ekseni aralığı artık modele göre ayarlanıyor ve ters çevriliyor
     fig.update_yaxes(range=[y_axis_max_range, y_axis_min_range], autorange=False, tickvals=tick_vals, ticktext=tick_text)
     
     a, b, c = final_poly.coeffs; formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
@@ -223,19 +219,15 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
         
         // --- BU FONKSİYONUN TAMAMI GÜNCELLENDİ ---
         async function createModelForType(runs, modelType) {
-            // Yeni Filtreleme Kriterleri
             const twoMonthsAgo = new Date();
             twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-            const MIN_DISTANCE = 13000; // 13 km
-            const MAX_RUNS_FOR_MODEL = 20; // Performans için üst sınır
+            const MIN_DISTANCE = 13000;
+            const MAX_RUNS_FOR_MODEL = 20;
 
             const filteredRuns = runs
-                .filter(run => {
-                    const activityDate = new Date(run.start_date);
-                    return run.distance > MIN_DISTANCE && activityDate > twoMonthsAgo;
-                })
-                .sort((a, b) => new Date(b.start_date) - new Date(a.start_date)) // En yeniden eskiye sırala
-                .slice(0, MAX_RUNS_FOR_MODEL); // En son 20 koşuyu al
+                .filter(run => new Date(run.start_date) > twoMonthsAgo && run.distance > MIN_DISTANCE)
+                .sort((a, b) => new Date(b.start_date) - new Date(a.start_date))
+                .slice(0, MAX_RUNS_FOR_MODEL);
 
             if (filteredRuns.length < 3) {
                 alert(`Model oluşturmak için son 2 ayda 13km üzeri yeterli ${modelType} koşusu bulunamadı (En az 3 koşu gerekli, bulunan: ${filteredRuns.length}).`);
@@ -247,18 +239,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
             elements.modelSelectionBox.style.display = 'none';
 
             try {
-                // Ortalama Nabız Hesaplama
-                const heartRates = filteredRuns
-                    .map(run => run.average_heartrate)
-                    .filter(hr => hr != null && hr > 0); // Nabız verisi olmayanları filtrele
-
-                let avgHeartRateText = "Ortalama nabız verisi bulunamadı.";
-                if (heartRates.length > 0) {
-                    const avgHeartRate = heartRates.reduce((sum, hr) => sum + hr, 0) / heartRates.length;
-                    avgHeartRateText = `Bu model, ortalama <b>${avgHeartRate.toFixed(0)} bpm</b> nabız ile koşulan antrenmanlara dayanmaktadır.`;
-                }
-                
-                // Aktivite verilerini çekme
                 const token = localStorage.getItem('strava_token');
                 const activityIds = filteredRuns.map(run => run.id);
 
@@ -269,6 +249,27 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 });
                 if (!response.ok) throw new Error(`Sunucu Hatası: Aktivitelerin detay verileri çekilemedi (${response.statusText})`);
                 const streams = await response.json();
+                
+                // Hibrit Nabız Hesaplama
+                const allHeartRates = [];
+                filteredRuns.forEach((run, index) => {
+                    if (run.average_heartrate && run.average_heartrate > 0) {
+                        allHeartRates.push(run.average_heartrate);
+                    } else {
+                        const stream = streams[index];
+                        if (stream && stream.heartrate && stream.heartrate.data && stream.heartrate.data.length > 0) {
+                            const hrStream = stream.heartrate.data;
+                            const streamAvg = hrStream.reduce((sum, val) => sum + val, 0) / hrStream.length;
+                            allHeartRates.push(streamAvg);
+                        }
+                    }
+                });
+
+                let avgHeartRateText = "Ortalama nabız verisi bulunamadı.";
+                if (allHeartRates.length > 0) {
+                    const avgHeartRate = allHeartRates.reduce((sum, hr) => sum + hr, 0) / allHeartRates.length;
+                    avgHeartRateText = `Bu model, ortalama <b>${avgHeartRate.toFixed(0)} bpm</b> nabız ile koşulan antrenmanlara dayanmaktadır.`;
+                }
                 
                 elements.status.textContent = `Veriler analiz ediliyor...`;
                 const convertFunc = pyodide.globals.get('convert_streams_to_gpx_points');
