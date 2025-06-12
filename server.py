@@ -116,7 +116,7 @@ def get_activity_streams():
         
         all_streams = []
         for act_id in activity_ids:
-            keys = 'time,latlng,altitude'
+            keys = 'time,latlng,altitude,heartrate'
             params = {'keys': keys, 'key_by_type': True}
             response = requests.get(f"https://www.strava.com/api/v3/activities/{act_id}/streams", headers=headers, params=params, timeout=20)
             response.raise_for_status()
