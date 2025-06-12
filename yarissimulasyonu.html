@@ -24,7 +24,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü</h1>
+        <h1>Strava Yarış Simülatörü v1.01</h1>
         
         <div class="box" id="login-box" style="display: none;">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -86,22 +86,36 @@ def format_pace_mmss(seconds_per_km):
 def convert_streams_to_gpx_points(streams_json):
     streams = json.loads(streams_json)
     all_points = []
-    start_time = datetime.now()
+    # Use a fixed start time for consistency if activities lack it
+    base_time = datetime.now() 
     for stream_set in streams:
+        activity_start_time = base_time # Default time
+        # In a real app, you would pass the actual activity start_date here.
         latlngs = stream_set.get('latlng', {}).get('data', [])
         alts = stream_set.get('altitude', {}).get('data', [])
         times = stream_set.get('time', {}).get('data', [])
         for i in range(len(latlngs)):
-            all_points.append(gpxpy.gpx.GPXTrackPoint(latitude=latlngs[i][0], longitude=latlngs[i][1], elevation=alts[i] if i < len(alts) else None, time=start_time + timedelta(seconds=times[i]) if i < len(times) else None))
+            point_time = activity_start_time + timedelta(seconds=times[i]) if i < len(times) else None
+            all_points.append(gpxpy.gpx.GPXTrackPoint(latitude=latlngs[i][0], longitude=latlngs[i][1], elevation=alts[i] if i < len(alts) else None, time=point_time))
     return all_points
 def create_performance_model(gpx_points):
     segments_data = []
     segment_length = 50.0
     outlier_threshold = 1.5
     if len(gpx_points) < 2: return None, "{}", ""
-    segment_start_point, cumulative_distance = gpx_points[0], 0.0
-    for i in range(1, len(gpx_points)):
-        prev_point, current_point = gpx_points[i-1], gpx_points[i]
+    gpx_for_smoothing = gpxpy.gpx.GPX()
+    track = gpxpy.gpx.GPXTrack()
+    segment = gpxpy.gpx.GPXTrackSegment()
+    segment.points.extend(gpx_points)
+    track.segments.append(segment)
+    gpx_for_smoothing.tracks.append(track)
+    if any(p.elevation is not None for p in gpx_points):
+        gpx_for_smoothing.smooth(vertical=True, remove_extremes=True)
+    
+    smoothed_points = gpx_for_smoothing.tracks[0].segments[0].points
+    segment_start_point, cumulative_distance = smoothed_points[0], 0.0
+    for i in range(1, len(smoothed_points)):
+        prev_point, current_point = smoothed_points[i-1], smoothed_points[i]
         delta_distance = current_point.distance_2d(prev_point)
         if delta_distance is None or delta_distance == 0: continue
         cumulative_distance += delta_distance
@@ -124,12 +138,9 @@ def create_performance_model(gpx_points):
         kept_indices = new_kept_indices
     final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2)); fig = go.Figure()
     marker_slopes = all_slopes[kept_indices]; marker_paces = all_paces[kept_indices]
-    valid_pace_predictions = final_poly([-35, 35]); pace_max_valid = valid_pace_predictions.max()
-    pace_range_buffer = (pace_max_valid - valid_pace_predictions.min()) * 0.10; final_pace_max_limit = pace_max_valid + pace_range_buffer
-    is_not_outlier_mask = marker_paces < final_pace_max_limit
-    clean_marker_slopes = marker_slopes[is_not_outlier_mask]; clean_marker_paces = marker_paces[is_not_outlier_mask]
-    clean_marker_custom_data = [format_pace_mmss(p) for p in clean_marker_paces]
-    fig.add_trace(go.Scatter(x=clean_marker_slopes, y=clean_marker_paces, mode='markers', name='Antrenman Verileri', customdata=clean_marker_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Pace: %{customdata}/km<extra></extra>'))
+    
+    clean_marker_custom_data = [format_pace_mmss(p) for p in marker_paces]
+    fig.add_trace(go.Scatter(x=marker_slopes, y=marker_paces, mode='markers', name='Antrenman Verileri', customdata=clean_marker_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Pace: %{customdata}/km<extra></extra>'))
     x_smooth = np.linspace(-30, 30, 200); y_smooth = final_poly(x_smooth); line_custom_data = [format_pace_mmss(p) for p in y_smooth]
     fig.add_trace(go.Scatter(x=x_smooth, y=y_smooth, mode='lines', name='Performans Modelin', line=dict(color='red'), customdata=line_custom_data, hovertemplate='<b>Eğim: %{x:.1f}%</b><br>Model Pace: %{customdata}/km<extra></extra>'))
     y_range_calc_points = final_poly([-35, 35]); y_min_model, y_max_model = y_range_calc_points.min(), y_range_calc_points.max()
@@ -141,6 +152,8 @@ def create_performance_model(gpx_points):
     return final_poly.coeffs.tolist(), fig.to_json(), formula_string
 def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
     gpx = gpxpy.parse(race_gpx_string)
+    if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
+        gpx.smooth(vertical=True, remove_extremes=True)
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not race_points: return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json()
     perf_model = np.poly1d(poly_coeffs)
@@ -184,13 +197,21 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
     return result_text, fig.to_json()
 `;
 
-        // JavaScript Bölümü Başlıyor
         const elements = {
             loader: document.getElementById('loader'), status: document.getElementById('status'), loginButton: document.getElementById('login-button'), loginBox: document.getElementById('login-box'), modelSelectionBox: document.getElementById('model-selection-box'), modelDisplayBox: document.getElementById('model-display-box'), simulationBox: document.getElementById('simulation-box'), resultBox: document.getElementById('result-box'), formulaDisplay: document.getElementById('formula-display'), roadModelBtn: document.getElementById('road-model-btn'), trailModelBtn: document.getElementById('trail-model-btn'), modelTitle: document.getElementById('model-title'), modelDescription: document.getElementById('model-description'), raceGpxInput: document.getElementById('race-gpx-input'), fatigueFactorInput: document.getElementById('fatigue-factor'), simulateButton: document.getElementById('simulate-button')
         };
         let performanceModelCoeffs = null, pyodide = null, roadRuns = [], trailRuns = [];
         
-        async function initializePyodide() { elements.status.textContent = "Python ortamı hazırlanıyor..."; elements.loader.style.display = 'block'; pyodide = await loadPyodide(); await pyodide.loadPackage(["numpy", "micropip"]); const micropip = pyodide.pyimport("micropip"); await micropip.install(['gpxpy', 'plotly', 'pandas']); pyodide.runPython(pythonCode); elements.loader.style.display = 'none'; }
+        async function initializePyodide() { 
+            elements.status.textContent = "Python ortamı hazırlanıyor..."; 
+            elements.loader.style.display = 'block'; 
+            pyodide = await loadPyodide(); 
+            await pyodide.loadPackage(["numpy", "micropip"]); 
+            const micropip = pyodide.pyimport("micropip"); 
+            await micropip.install(['gpxpy', 'plotly', 'pandas']); 
+            pyodide.runPython(pythonCode); 
+            elements.loader.style.display = 'none'; 
+        }
         
         async function createModelForType(runs, modelType) {
             const minDist = 15000; const maxDist = 40000;
@@ -208,10 +229,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
 
                 const response = await fetch('/api/get_activity_streams', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify({ activity_ids: activityIds })
                 });
                 if (!response.ok) throw new Error(`Sunucu Hatası: Aktivitelerin detay verileri çekilemedi (${response.statusText})`);
@@ -244,6 +262,16 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
             }
         }
         
+        function logoutAndShowLogin(errorMessage) {
+            localStorage.removeItem('strava_token');
+            elements.loginBox.style.display = 'block';
+            elements.modelSelectionBox.style.display = 'none';
+            elements.modelDisplayBox.style.display = 'none';
+            elements.simulationBox.style.display = 'none';
+            elements.resultBox.style.display = 'none';
+            elements.status.textContent = errorMessage || "Lütfen önce giriş yapın.";
+        }
+        
         async function handleSuccessfulLogin(token) {
             elements.loginBox.style.display = 'none';
             elements.status.textContent = "Tüm koşu antrenmanlarınız Strava'dan çekiliyor...";
@@ -252,10 +280,14 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 const response = await fetch('/api/get_activities', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+                
                 if (!response.ok) {
-                    if(response.status === 401) localStorage.removeItem('strava_token');
-                    throw new Error(`Sunucu Hatası: Aktiviteler alınamadı (${response.statusText})`);
+                    if (response.status === 401) {
+                        throw new Error("Authorization Error"); 
+                    }
+                    throw new Error(`Sunucu Hatası (${response.status})`);
                 }
+
                 const allActivities = await response.json();
                 roadRuns = allActivities.filter(act => act.sport_type === 'Run' || act.sport_type === 'VirtualRun');
                 trailRuns = allActivities.filter(act => act.sport_type === 'TrailRun');
@@ -265,9 +297,11 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 elements.modelSelectionBox.style.display = 'block';
             } catch (error) {
                 console.error("Veri yükleme hatası:", error);
-                elements.status.textContent = `Bir hata oluştu: ${error.message}.`;
-                localStorage.removeItem('strava_token');
-                elements.loginBox.style.display = 'block';
+                if (error.message === "Authorization Error") {
+                    logoutAndShowLogin("Oturumunuz geçersiz veya süresi dolmuş. Lütfen tekrar bağlanın.");
+                } else {
+                    logoutAndShowLogin(`Aktiviteler alınırken bir hata oluştu: ${error.message}.`);
+                }
             } finally {
                 elements.loader.style.display = 'none';
             }
@@ -283,9 +317,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
         elements.simulateButton.onclick = () => {
             const raceFile = elements.raceGpxInput.files[0];
             const fatigue = parseFloat(elements.fatigueFactorInput.value);
-            if (!raceFile) {
-                alert("Lütfen bir yarış GPX dosyası seçin."); return;
-            }
+            if (!raceFile) { alert("Lütfen bir yarış GPX dosyası seçin."); return; }
             elements.status.textContent = "Yarış simüle ediliyor...";
             elements.loader.style.display = 'block';
             const reader = new FileReader();
@@ -312,20 +344,15 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
         
         async function initializeApp() {
             await initializePyodide();
-            
-            // Bu script ana sayfadaki (`index.html`) script ile birlikte çalışır.
-            // Ana sayfa token'ı yakalayıp kaydeder. Bu sayfa sadece kontrol eder.
             const token = localStorage.getItem('strava_token');
             if (token) {
                 handleSuccessfulLogin(token);
             } else {
-                elements.status.textContent = "Lütfen önce giriş yapın.";
-                elements.loginBox.style.display = 'block';
+                logoutAndShowLogin();
             }
         }
 
         initializeApp();
-
     </script>
 </body>
 </html>
