@@ -23,7 +23,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü 1.04</h1>
+        <h1>Strava Yarış Simülatörü v1.05</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -294,7 +294,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
 `;
 
         async function main() {
-            // Elementleri seç
             const loader = document.getElementById('loader');
             const status = document.getElementById('status');
             const loginButton = document.getElementById('login-button');
@@ -309,11 +308,8 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
             const resultBox = document.getElementById('result-box');
             const formulaDisplay = document.getElementById('formula-display');
 
-            // Global değişkenler
             let performanceModelCoeffs = null;
             let pyodide = null;
-
-            // ---- Ana Fonksiyonlar ----
 
             async function initializePyodide() {
                 status.textContent = "Python ortamı hazırlanıyor...";
@@ -329,7 +325,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
             async function createCombinedModel(allActivities) {
                 const twoMonthsAgo = new Date();
                 twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
-                const MIN_DISTANCE = 13000; // 13 km
+                const MIN_DISTANCE = 13000;
                 const MAX_RUNS_FOR_MODEL = 40;
 
                 const filteredRuns = allActivities
@@ -362,11 +358,9 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                     
                     const allHeartRates = [];
                     filteredRuns.forEach((run, index) => {
-                        // Öncelik aktivite özetindeki nabız verisinde
                         if (run.average_heartrate && run.average_heartrate > 0) {
                             allHeartRates.push(run.average_heartrate);
                         } else {
-                            // Eğer özette yoksa, stream'den hesapla
                             const stream = streams[index];
                             if (stream && stream.heartrate && stream.heartrate.data && stream.heartrate.data.length > 0) {
                                 const hrStream = stream.heartrate.data;
@@ -405,6 +399,9 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                 } catch (error) {
                     console.error("Model oluşturma hatası:", error);
                     status.textContent = `Bir hata oluştu: ${error.message}.`;
+                    // Hata durumunda tekrar giriş yapabilmesi için login kutusunu göster
+                    loginBox.style.display = 'block';
+                    modelDisplayBox.style.display = 'none';
                 } finally {
                     loader.style.display = 'none';
                 }
@@ -478,7 +475,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent):
                         loader.style.display = 'none';
                     }
                 };
-                reader.readAsText(file);
+                reader.readAsText(raceFile);
             };
 
             await initializePyodide();
