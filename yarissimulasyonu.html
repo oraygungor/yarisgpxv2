@@ -37,7 +37,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.12 (Stabil)</h1>
+        <h1>Strava Yarış Simülatörü v1.13 (Kararlı Sürüm)</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -113,21 +113,15 @@ def format_duration_hhmmss(total_seconds):
 def convert_streams_to_gpx_points(streams_json):
     streams, all_points, base_time = json.loads(streams_json), [], datetime.now() 
     for stream_set in streams:
-        latlngs = stream_set.get('latlng', {}).get('data', [])
-        alts = stream_set.get('altitude', {}).get('data', [])
-        times = stream_set.get('time', {}).get('data', [])
+        latlngs, alts, times = stream_set.get('latlng', {}).get('data', []), stream_set.get('altitude', {}).get('data', []), stream_set.get('time', {}).get('data', [])
         for i in range(len(latlngs)):
             point_time = base_time + timedelta(seconds=times[i]) if i < len(times) else None
             all_points.append(gpxpy.gpx.GPXTrackPoint(latitude=latlngs[i][0], longitude=latlngs[i][1], elevation=alts[i] if i < len(alts) else None, time=point_time))
     return all_points
 
 def create_performance_model(gpx_points):
-    if not gpx_points or len(gpx_points) < 2: 
-        return None, "{}", "Analiz için yeterli GPX noktası bulunamadı."
+    if not gpx_points or len(gpx_points) < 2: return None, "{}", "Analiz için yeterli GPX noktası bulunamadı."
     
-    # --- SAĞLAMLAŞTIRILMIŞ VERİ TEMİZLEME ---
-    # `smooth` fonksiyonu agresif olabilir. Başarısız olursa veya tüm veriyi silerse,
-    # programın çökmemesi için ham verilerle devam et (fallback).
     try:
         gpx_to_process = gpxpy.gpx.GPX()
         track = gpxpy.gpx.GPXTrack()
@@ -137,23 +131,17 @@ def create_performance_model(gpx_points):
         if any(p.elevation is not None for p in gpx_points):
             gpx_to_process.smooth(vertical=True, remove_extremes=True)
         
-        # Kontrol: Düzeltme sonrası veri kaldı mı?
         if not gpx_to_process.tracks or not gpx_to_process.tracks[0].segments or not gpx_to_process.tracks[0].segments[0].points:
-            # Düzeltme başarısız olduysa (tüm veriyi sildiyse), ham veriyi kullan
             points_for_analysis = gpx_points
         else:
             points_for_analysis = gpx_to_process.tracks[0].segments[0].points
     except Exception:
-        # Herhangi bir smooth hatasında da ham veriyi kullan
         points_for_analysis = gpx_points
-    # --- SAĞLAMLAŞTIRMA SONU ---
 
-    if len(points_for_analysis) < 2: 
-        return None, "{}", "GPX veri analizi sonrası kullanılabilir nokta kalmadı."
+    if len(points_for_analysis) < 2: return None, "{}", "GPX veri analizi sonrası kullanılabilir nokta kalmadı."
          
     segments_data, segment_length = [], 50.0
     segment_start_point, cumulative_distance = points_for_analysis[0], 0.0
-    
     for i in range(1, len(points_for_analysis)):
         prev_point, current_point = points_for_analysis[i-1], points_for_analysis[i]
         delta_distance = current_point.distance_2d(prev_point)
@@ -172,7 +160,6 @@ def create_performance_model(gpx_points):
     all_slopes, all_paces = np.array([d['slope'] for d in segments_data]), np.array([d['pace_sec'] for d in segments_data])
     kept_indices = np.arange(len(all_slopes))
     outlier_threshold = 1.5
-    
     for _ in range(10):
         fit_slopes, fit_paces = all_slopes[kept_indices], all_paces[kept_indices]
         if len(fit_slopes) < 3: break
@@ -215,41 +202,70 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not race_points: return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json(), None, None
 
-    point_distances_km, point_times_sec, point_gains, point_losses = [0.0], [0.0], [0.0], [0.0]
-    dist, time_sec, gain, loss, fatigue, perf_model = 0.0, 0.0, 0.0, 0.0, 1.0, np.poly1d(poly_coeffs)
-    for i in range(1, len(race_points)):
-        p1, p2 = race_points[i-1], race_points[i]
-        d = p1.distance_2d(p2)
-        if d is None or d <= 0:
-            point_distances_km.append(dist/1000.0); point_times_sec.append(time_sec); point_gains.append(gain); point_losses.append(loss)
-            continue
-        ele_delta = p2.elevation - p1.elevation if p2.elevation is not None and p1.elevation is not None else 0
-        slope = (ele_delta / d) * 100 if d > 0 else 0
-        if dist > 20000 and (dist // 20000 > (dist - d) // 20000): fatigue *= (1 + fatigue_percent / 100)
-        predicted_pace = perf_model(np.clip(slope, -35, 35)) * fatigue * hr_adjustment_factor
-        dist += d; time_sec += predicted_pace * (d / 1000)
-        if ele_delta > 0: gain += ele_delta
-        else: loss -= ele_delta
-        point_distances_km.append(dist / 1000.0); point_times_sec.append(time_sec); point_gains.append(gain); point_losses.append(loss)
+    # --- SIMULASYON MANTIĞI GERİ YÜKLENDİ ---
+    perf_model, fatigue_factor = np.poly1d(poly_coeffs), 1.0
+    total_time_sec, total_dist_m, total_gain, total_loss = 0, 0, 0, 0
+    
+    # Rota ve Pace profili için listeler
+    profile_dist_km, profile_ele_m = [0], [race_points[0].elevation or 0]
+    profile_total_time_s, profile_total_gain, profile_total_loss = [0], [0], [0]
+    
+    segment_length, cumulative_segment_dist = 20.0, 0.0
+    segment_start_point = race_points[0]
 
+    for i in range(1, len(race_points)):
+        prev_point, current_point = race_points[i-1], current_point
+        
+        delta_dist = current_point.distance_2d(prev_point)
+        if delta_dist is None or delta_dist <= 0: continue
+        
+        total_dist_m += delta_dist
+        cumulative_segment_dist += delta_dist
+
+        ele_delta = 0
+        if current_point.elevation is not None and prev_point.elevation is not None:
+            ele_delta = current_point.elevation - prev_point.elevation
+            if ele_delta > 0: total_gain += ele_delta
+            else: total_loss -= ele_delta
+
+        if cumulative_segment_dist >= segment_length:
+            if total_dist_m > 20000 and (total_dist_m // 20000 > (total_dist_m - cumulative_segment_dist) // 20000):
+                fatigue_factor *= (1 + fatigue_percent / 100)
+            
+            seg_ele_delta = current_point.elevation - segment_start_point.elevation if current_point.elevation and segment_start_point.elevation else 0
+            slope = (seg_ele_delta / cumulative_segment_dist) * 100
+            predicted_pace_sec_km = perf_model(np.clip(slope, -35, 35)) * fatigue_factor * hr_adjustment_factor
+            
+            segment_time = predicted_pace_sec_km * (cumulative_segment_dist / 1000)
+            total_time_sec += segment_time
+
+            # Her segment sonunda profil verilerini ekle
+            profile_dist_km.append(total_dist_m / 1000)
+            profile_ele_m.append(current_point.elevation if current_point.elevation is not None else profile_ele_m[-1])
+            profile_total_time_s.append(total_time_sec)
+            profile_total_gain.append(total_gain)
+            profile_total_loss.append(total_loss)
+
+            segment_start_point, cumulative_segment_dist = current_point, 0.0
+    # --- SIMULASYON MANTIĞI SONU ---
+            
+    # Waypoint İşleme
     table_data, map_waypoint_data, waypoint_indices = [], [], []
     process_waypoints = len(gpx.waypoints) > 2
     if process_waypoints:
-        for waypoint in gpx.waypoints:
-            min_dist, closest_point_index = float('inf'), -1
-            for i, point in enumerate(race_points):
-                d = waypoint.distance_2d(point)
-                if d < min_dist: min_dist, closest_point_index = d, i
-            if closest_point_index != -1: waypoint_indices.append((closest_point_index, waypoint))
-        waypoint_indices.sort(key=lambda x: x[0])
+        gpx.add_elevation_to_waypoints()
+        for waypoint in gpx.waypoints: waypoint_indices.append((gpx.get_nearest_location_info(waypoint), waypoint))
+        waypoint_indices.sort(key=lambda x: x[0][1]) # Mesafe'ye göre sırala
     
     last_wp_dist, last_wp_time, last_wp_gain, last_wp_loss = 0, 0, 0, 0
     last_wp_name, last_wp_link = "Start", f"https://www.google.com/maps?q={race_points[0].latitude},{race_points[0].longitude}"
     start_date = datetime.fromtimestamp(start_timestamp_sec, tz=timezone.utc).date()
-    for idx, wp in waypoint_indices:
-        cumulative_dist_m, total_time_sec, total_gain, total_loss = point_distances_km[idx]*1000, point_times_sec[idx], point_gains[idx], point_losses[idx]
-        arrival_dt = datetime.fromtimestamp(start_timestamp_sec + total_time_sec, tz=timezone.utc)
-        day_diff = (arrival_dt.date() - start_date).days
+
+    for (location_info, wp) in waypoint_indices:
+        track_point, cumulative_dist_m, track_idx = location_info
+        interp_time = np.interp(cumulative_dist_m, [r.distance_from_start for r in gpx.get_points_data()], [r.time_from_start for r in gpx.get_points_data()])
+        total_time_sec, total_gain, total_loss = np.interp(cumulative_dist_m, profile_dist_km, profile_total_time_s), np.interp(cumulative_dist_m, profile_dist_km, profile_total_gain), np.interp(cumulative_dist_m, profile_dist_km, profile_total_loss)
+        arrival_dt, day_diff = datetime.fromtimestamp(start_timestamp_sec + total_time_sec, tz=timezone.utc), (datetime.fromtimestamp(start_timestamp_sec + total_time_sec, tz=timezone.utc).date() - start_date).days
         arrival_time_str = arrival_dt.strftime('%H:%M') + (f' (+{day_diff} gün)' if day_diff > 0 else '')
         seg_dist, seg_time, seg_gain, seg_loss = cumulative_dist_m - last_wp_dist, total_time_sec - last_wp_time, total_gain - last_wp_gain, total_loss - last_wp_loss
         wp_link = f"https://www.google.com/maps?q={wp.latitude},{wp.longitude}"
@@ -259,27 +275,24 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
         last_wp_dist, last_wp_time, last_wp_gain, last_wp_loss = cumulative_dist_m, total_time_sec, total_gain, total_loss
         last_wp_name, last_wp_link = wp.name, wp_link
 
-    total_time_sec_final, cumulative_dist_m_final, total_gain_final, total_loss_final = point_times_sec[-1], point_distances_km[-1]*1000, point_gains[-1], point_losses[-1]
-    if process_waypoints and cumulative_dist_m_final > last_wp_dist:
-        arrival_dt = datetime.fromtimestamp(start_timestamp_sec + total_time_sec_final, tz=timezone.utc); day_diff = (arrival_dt.date() - start_date).days
+    if process_waypoints and total_dist_m > last_wp_dist:
+        arrival_dt, day_diff = datetime.fromtimestamp(start_timestamp_sec + total_time_sec, tz=timezone.utc), (datetime.fromtimestamp(start_timestamp_sec + total_time_sec, tz=timezone.utc).date() - start_date).days
         arrival_time_str = arrival_dt.strftime('%H:%M') + (f' (+{day_diff} gün)' if day_diff > 0 else '')
-        seg_dist, seg_time, seg_gain, seg_loss = cumulative_dist_m_final - last_wp_dist, total_time_sec_final - last_wp_time, total_gain_final - last_wp_gain, total_loss_final - last_wp_loss
+        seg_dist, seg_time, seg_gain, seg_loss = total_dist_m - last_wp_dist, total_time_sec - last_wp_time, total_gain - last_wp_gain, total_loss - last_wp_loss
         finish_link = f"https://www.google.com/maps?q={race_points[-1].latitude},{race_points[-1].longitude}"
-        table_data.append({"start_segment_name": last_wp_name, "end_segment_name": "Finish", "start_segment_link": last_wp_link, "end_segment_link": finish_link, "segment_dist_km": seg_dist/1000, "segment_gain_m": seg_gain, "segment_loss_m": seg_loss, "segment_time_str": format_duration_hhmmss(seg_time), "segment_pace_str": format_pace_mmss(seg_time/(seg_dist/1000) if seg_dist>0 else 0), "total_dist_km": cumulative_dist_m_final/1000, "total_gain_m": total_gain_final, "total_loss_m": total_loss_final, "total_time_str": format_duration_hhmmss(total_time_sec_final), "arrival_time_str": arrival_time_str, "total_pace_str": format_pace_mmss(total_time_sec_final/(cumulative_dist_m_final/1000) if cumulative_dist_m_final>0 else 0)})
+        table_data.append({"start_segment_name": last_wp_name, "end_segment_name": "Finish", "start_segment_link": last_wp_link, "end_segment_link": finish_link, "segment_dist_km": seg_dist/1000, "segment_gain_m": seg_gain, "segment_loss_m": seg_loss, "segment_time_str": format_duration_hhmmss(seg_time), "segment_pace_str": format_pace_mmss(seg_time/(seg_dist/1000) if seg_dist>0 else 0), "total_dist_km": total_dist_m/1000, "total_gain_m": total_gain, "total_loss_m": total_loss, "total_time_str": format_duration_hhmmss(total_time_sec), "arrival_time_str": arrival_time_str, "total_pace_str": format_pace_mmss(total_time_sec/(total_dist_m/1000) if total_dist_m>0 else 0)})
 
-    result_text, fig = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec_final)}", go.Figure()
-    point_distances_km_np, point_times_sec_np = np.array(point_distances_km[1:]), np.array(point_times_sec[1:])
+    result_text, fig = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec)}", go.Figure()
+    profile_dist_km_np, profile_total_time_s_np = np.array(profile_dist_km[1:]), np.array(profile_total_time_s[1:])
     with np.errstate(divide='ignore', invalid='ignore'):
-        avg_paces_min_km = np.divide(point_times_sec_np, point_distances_km_np); avg_paces_min_km[np.isinf(avg_paces_min_km) | np.isnan(avg_paces_min_km)] = 0
-    hover_custom_data = np.stack(([format_pace_mmss(p) for p in avg_paces_min_km], [format_duration_hhmmss(t) for t in point_times_sec_np], point_gains[1:], point_losses[1:]), axis=-1)
-    fig.add_trace(go.Scatter(x=point_distances_km_np, y=[p.elevation for p in race_points[1:]], name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'), customdata=hover_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
+        avg_paces_min_km = np.divide(profile_total_time_s_np, profile_dist_km_np); avg_paces_min_km[np.isinf(avg_paces_min_km) | np.isnan(avg_paces_min_km)] = 0
+    hover_custom_data = np.stack(([format_pace_mmss(p) for p in avg_paces_min_km], [format_duration_hhmmss(t) for t in profile_total_time_s_np], profile_total_gain[1:], profile_total_loss[1:]), axis=-1)
+    fig.add_trace(go.Scatter(x=profile_dist_km_np, y=profile_ele_m[1:], name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'), customdata=hover_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
     with np.errstate(divide='ignore', invalid='ignore'):
-        y_pace_values = np.divide(point_times_sec_np, point_distances_km_np) / 60; y_pace_values[np.isinf(y_pace_values) | np.isnan(y_pace_values)] = 0
-    fig.add_trace(go.Scatter(x=point_distances_km_np, y=y_pace_values.tolist(), name='Ort. Pace', line=dict(color='orange'), customdata=hover_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
+        y_pace_values = np.divide(profile_total_time_s_np, profile_dist_km_np) / 60; y_pace_values[np.isinf(y_pace_values) | np.isnan(y_pace_values)] = 0
+    fig.add_trace(go.Scatter(x=profile_dist_km_np, y=y_pace_values.tolist(), name='Ort. Pace', line=dict(color='orange'), customdata=hover_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
     if process_waypoints:
-        wp_dists_km, wp_eles, wp_names = [], [], []
-        for idx, wp in waypoint_indices:
-            wp_dists_km.append(point_distances_km[idx]); wp_eles.append(race_points[idx].elevation); wp_names.append(wp.name)
+        wp_dists_km, wp_eles, wp_names = [info[1]/1000 for info, _ in waypoint_indices], [info[0].elevation for info, _ in waypoint_indices], [wp.name for _, wp in waypoint_indices]
         fig.add_trace(go.Scatter(x=wp_dists_km, y=wp_eles, mode='markers+text', name='Kontrol Noktaları', yaxis='y2', marker=dict(color='red', size=8, symbol='circle'), text=wp_names, textposition="top center", textfont=dict(size=10), hoverinfo='skip'))
     y_tickvals_min, y_ticktext_str = [], []
     if avg_paces_min_km.size > 0:
@@ -288,7 +301,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             y_min_sec, y_max_sec = int(np.min(valid_paces)//30)*30, (int(np.max(valid_paces)//30)+1)*30
             y_tickvals_sec = np.arange(max(0, y_min_sec), y_max_sec + 30, 30)
             y_ticktext_str, y_tickvals_min = [format_pace_mmss(s) for s in y_tickvals_sec], [s/60 for s in y_tickvals_sec]
-    fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", xaxis_range=[0, cumulative_dist_m_final/1000], yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0.5, y=-0.2, xanchor='center', yanchor='top', orientation="h"))
+    fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", xaxis_range=[0, total_dist_m/1000], yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0.5, y=-0.2, xanchor='center', yanchor='top', orientation="h"))
     table_json, map_data_json = json.dumps(table_data) if table_data else None, json.dumps({"route": [[p.latitude, p.longitude] for p in race_points], "waypoints": map_waypoint_data}) if process_waypoints else None
     return result_text, fig.to_json(), table_json, map_data_json
 `;
@@ -505,6 +518,10 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 reader.onload = function(e) {
                     try {
                         const simulateFunc = pyodide.globals.get('simulate_race');
+                        // Waypoint işleme için gpxpy'nin kendi metodlarını kullanmak daha doğru sonuçlar verebilir
+                        // Bu nedenle simulate_race içinde gpxpy'nin kendi araçları kullanılmalı
+                        const gpxForWp = pyodide.globals.get('gpxpy').parse(e.target.result);
+                        gpxForWp.get_track_points_data() // Mesafeleri ve süreleri önceden hesaplat
                         const [resultText, resultFigJson, tableDataJson, mapDataJson] = simulateFunc(e.target.result, performanceModelCoeffs, parseFloat(fatigueFactorInput.value), hr_adjustment_factor, start_timestamp_sec).toJs();
                         
                         document.getElementById('estimated-time').textContent = resultText;
