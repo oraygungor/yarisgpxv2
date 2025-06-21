@@ -22,7 +22,7 @@
         #status { text-align: center; font-style: italic; color: #606770; min-height: 2em; }
         #formula-display { text-align: center; font-family: 'Courier New', Courier, monospace; background-color: #f0f2f5; padding: 10px; border-radius: 4px; margin-top: 20px; }
         #model-description { text-align: center; margin-bottom: 20px; }
-        #race-map { height: 450px; width: 100%; border-radius: 8px; margin-top: 30px; } /* Değişiklik: margin-top eklendi */
+        #race-map { height: 450px; width: 100%; border-radius: 8px; margin-top: 30px; }
         #result-table-container { margin-top: 30px; overflow-x: auto; }
         #result-table { width: 100%; border-collapse: collapse; font-size: 14px; }
         #result-table th, #result-table td { border: 1px solid #ddd; padding: 10px; text-align: right; }
@@ -38,7 +38,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.08</h1>
+        <h1>Strava Yarış Simülatörü v1.09</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -67,7 +67,6 @@
                     <input type="number" id="target-hr" min="80" max="220" step="1" disabled>
                     <span id="training-avg-hr-info"></span>
                     <br>
-                    <!-- YENİ: Başlangıç Saati Girişi -->
                     <label for="start-time">Başlangıç Saati:</label>
                     <input type="time" id="start-time" value="07:00">
                 </div>
@@ -80,7 +79,6 @@
             <h2>Simülasyon Sonucu</h2>
             <h3 id="estimated-time" style="text-align:center; color: #fc4c02;"></h3>
             <div id="result-graph"></div>
-            <!-- DEĞİŞİKLİK: Harita ve Tablo yeri değiştirildi -->
             <div id="result-table-container"></div>
             <div id="race-map-container" style="display:none;"><div id="race-map"></div></div>
         </div>
@@ -202,7 +200,6 @@ def create_performance_model(gpx_points):
     formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
     return final_poly.coeffs.tolist(), fig.to_json(), formula_string
 
-# YENİ: start_time_str parametresi eklendi
 def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_factor, start_time_str):
     gpx = gpxpy.parse(race_gpx_string)
     if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
@@ -211,7 +208,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not race_points: return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json(), None, None
 
-    # YENİ: Başlangıç saatini parse et
     start_datetime = datetime.combine(date.today(), datetime.strptime(start_time_str, '%H:%M').time())
 
     point_distances_km = [0.0]
@@ -293,7 +289,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             current_total_dist_km = cumulative_dist_m / 1000
             current_total_time_str = format_duration_hhmmss(total_time_sec)
             
-            # YENİ: Varış saatini hesapla
             arrival_datetime = start_datetime + timedelta(seconds=total_time_sec)
             day_diff = (arrival_datetime.date() - start_datetime.date()).days
             time_of_day_str = arrival_datetime.strftime('%H:%M')
@@ -308,7 +303,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 "segment_pace_str": format_pace_mmss(seg_time / (seg_dist/1000) if seg_dist > 0 else 0),
                 "total_dist_km": current_total_dist_km, "total_gain_m": total_gain, "total_loss_m": total_loss,
                 "total_time_str": current_total_time_str,
-                "time_of_day_str": time_of_day_str, # Yeni veri
+                "time_of_day_str": time_of_day_str,
                 "total_pace_str": format_pace_mmss(total_time_sec / current_total_dist_km if current_total_dist_km > 0 else 0),
             }
             table_data.append(table_row)
@@ -323,7 +318,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
         seg_gain, seg_loss = total_gain - last_wp_gain, total_loss - last_wp_loss
         finish_link = f"https://www.google.com/maps?q={race_points[-1].latitude},{race_points[-1].longitude}"
         
-        # YENİ: Bitiş varış saatini hesapla
         arrival_datetime = start_datetime + timedelta(seconds=total_time_sec)
         day_diff = (arrival_datetime.date() - start_datetime.date()).days
         time_of_day_str = arrival_datetime.strftime('%H:%M')
@@ -338,7 +332,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             "segment_pace_str": format_pace_mmss(seg_time / (seg_dist/1000) if seg_dist > 0 else 0),
             "total_dist_km": cumulative_dist_m / 1000, "total_gain_m": total_gain, "total_loss_m": total_loss,
             "total_time_str": format_duration_hhmmss(total_time_sec),
-            "time_of_day_str": time_of_day_str, # Yeni veri
+            "time_of_day_str": time_of_day_str,
             "total_pace_str": format_pace_mmss(total_time_sec / (cumulative_dist_m/1000) if cumulative_dist_m > 0 else 0),
         })
 
@@ -366,7 +360,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
 
     fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0.5, y=-0.2, xanchor='center', yanchor='top', orientation="h"))
     
-    # YENİ: X ekseni aralığını yarışın toplam mesafesiyle sınırla
     if profile_dist_km:
         fig.update_xaxes(range=[0, profile_dist_km[-1]])
 
@@ -386,7 +379,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             const raceGpxInput = document.getElementById('race-gpx-input');
             const fatigueFactorInput = document.getElementById('fatigue-factor');
             const targetHrInput = document.getElementById('target-hr');
-            const startTimeInput = document.getElementById('start-time'); // Yeni
+            const startTimeInput = document.getElementById('start-time');
             const trainingAvgHrInfo = document.getElementById('training-avg-hr-info');
             const simulateButton = document.getElementById('simulate-button');
             const modelDisplayBox = document.getElementById('model-display-box');
@@ -501,7 +494,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 table.id = 'result-table';
                 const thead = table.createTHead();
                 const headerRow = thead.insertRow();
-                // YENİ: Başlık eklendi
                 const headers = ["Segment", "Segment Süre", "Segment Pace", "Segment Mesafe", "Segment Kazanç/Kayıp", "Toplam Süre", "Varış Saati", "Toplam Pace", "Toplam Mesafe", "Toplam Kazanç/Kayıp"];
                 headers.forEach(text => { const th = document.createElement('th'); th.textContent = text; headerRow.appendChild(th); });
 
@@ -520,7 +512,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     tr.insertCell().textContent = `${row.segment_dist_km.toFixed(2)} km`;
                     tr.insertCell().textContent = `+${Math.round(row.segment_gain_m)}m / -${Math.round(row.segment_loss_m)}m`;
                     tr.insertCell().textContent = row.total_time_str;
-                    tr.insertCell().textContent = row.time_of_day_str; // Yeni hücre
+                    tr.insertCell().textContent = row.time_of_day_str;
                     tr.insertCell().textContent = row.total_pace_str;
                     tr.insertCell().textContent = `${row.total_dist_km.toFixed(2)} km`;
                     tr.insertCell().textContent = `+${Math.round(row.total_gain_m)}m / -${Math.round(row.total_loss_m)}m`;
@@ -534,7 +526,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 totalRow.insertCell().textContent = `${lastRow.total_dist_km.toFixed(2)} km`;
                 totalRow.insertCell().textContent = `+${Math.round(lastRow.total_gain_m)}m / -${Math.round(lastRow.total_loss_m)}m`;
                 totalRow.insertCell().textContent = lastRow.total_time_str;
-                totalRow.insertCell().textContent = lastRow.time_of_day_str; // Yeni hücre
+                totalRow.insertCell().textContent = lastRow.time_of_day_str;
                 totalRow.insertCell().textContent = lastRow.total_pace_str;
                 totalRow.insertCell().textContent = "-"; totalRow.insertCell().textContent = "-";
                 resultTableContainer.appendChild(table);
@@ -543,14 +535,16 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             function renderRaceMap(mapData) {
                 raceMapContainer.style.display = 'block';
                 if (raceMap) { raceMap.remove(); }
+                
+                // DÜZELTME: Daha iyi bir harita altlığı (OpenTopoMap) kullanıldı.
                 raceMap = L.map('race-map');
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 17,
+                    attribution: 'Map data: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: © <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
                 }).addTo(raceMap);
 
                 const routePolyline = L.polyline(mapData.route, {color: 'blue'}).addTo(raceMap);
-                raceMap.fitBounds(routePolyline.getBounds()); // Haritayı rotaya sığdırır
-
+                
                 mapData.waypoints.forEach(wp => {
                     const popupContent = `
                         <b>${wp.name}</b><br>
@@ -562,6 +556,9 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     `;
                     L.marker([wp.lat, wp.lon]).addTo(raceMap).bindPopup(popupContent);
                 });
+
+                // DÜZELTME: Zoom komutunun doğru çalışması için rotanın sınırları fonksiyondan döndürülüyor.
+                return routePolyline.getBounds();
             }
             
             async function handleLogin() {
@@ -600,7 +597,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             simulateButton.onclick = () => {
                 const raceFile = raceGpxInput.files[0];
                 const fatigue = parseFloat(fatigueFactorInput.value);
-                const startTimeStr = startTimeInput.value; // Yeni
+                const startTimeStr = startTimeInput.value;
                 if (!raceFile) {
                     alert("Lütfen bir yarış GPX dosyası seçin."); return;
                 }
@@ -608,10 +605,11 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 if (isNaN(targetHR)) {
                     alert("Lütfen geçerli bir hedef nabız değeri girin."); return;
                 }
-                if (!startTimeStr) { // Yeni
+                if (!startTimeStr) {
                     alert("Lütfen geçerli bir başlangıç saati girin."); return;
                 }
 
+                // DÜZELTME: Katsayı 0.009 olarak güncellendi.
                 const hrPerformanceChangePerBPM = 0.009; 
                 const hr_adjustment_factor = 1.0 - (targetHR - trainingAvgHR) * hrPerformanceChangePerBPM;
 
@@ -626,7 +624,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     const raceGpxContent = e.target.result;
                     try {
                         const simulateFunc = pyodide.globals.get('simulate_race');
-                        // Yeni: startTimeStr parametresi eklendi
                         const [resultText, resultFigJson, tableDataJson, mapDataJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue, hr_adjustment_factor, startTimeStr).toJs();
                         
                         document.getElementById('estimated-time').textContent = resultText;
@@ -636,16 +633,27 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                         if (tableDataJson) {
                             renderWaypointTable(JSON.parse(tableDataJson));
                         }
-
+                        
+                        // DÜZELTME: Harita oluşturulur ve rotanın sınırları alınır.
+                        let raceBounds = null;
                         if (mapDataJson) {
-                            renderRaceMap(JSON.parse(mapDataJson));
+                            raceBounds = renderRaceMap(JSON.parse(mapDataJson));
                         }
 
                         resultBox.style.display = 'block';
                         status.textContent = "Simülasyon tamamlandı.";
+                        
+                        // DÜZELTME: Harita ve grafikler göründükten sonra boyutları yenilenir ve zoom yapılır.
                         setTimeout(() => {
                             Plotly.Plots.resize('result-graph');
-                            if (raceMap) raceMap.invalidateSize();
+                            if (raceMap) {
+                                // Önce haritanın boyutunu yenile
+                                raceMap.invalidateSize(); 
+                                // Sonra rotanın sınırlarına zoom yap
+                                if (raceBounds) {
+                                    raceMap.fitBounds(raceBounds);
+                                }
+                            }
                         }, 100);
                     } catch (error) {
                         console.error("Simulation error:", error);
