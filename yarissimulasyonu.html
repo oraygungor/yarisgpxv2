@@ -612,7 +612,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     alert("Lütfen geçerli bir başlangıç saati girin."); return;
                 }
 
-                const hrPerformanceChangePerBPM = 0.007; 
+                const hrPerformanceChangePerBPM = 0.009; 
                 const hr_adjustment_factor = 1.0 - (targetHR - trainingAvgHR) * hrPerformanceChangePerBPM;
 
                 status.textContent = "Yarış simüle ediliyor...";
