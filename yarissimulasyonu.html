@@ -15,14 +15,14 @@
         .box { background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
         h1, h2 { color: #1c1e21; text-align: center; }
         .controls, .simulation-controls { text-align: center; margin: 20px 0; }
-        button, input[type="file"], input[type="number"], select { padding: 10px 15px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc; font-size: 16px; margin: 5px; }
+        button, input[type="file"], input[type="number"], input[type="time"], select { padding: 10px 15px; cursor: pointer; border-radius: 6px; border: 1px solid #ccc; font-size: 16px; margin: 5px; }
         #login-button { background-color: #fc4c02; color: white; border-color: #fc4c02; font-weight: bold; }
         #loader { border: 6px solid #f3f3f3; border-top: 6px solid #fc4c02; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #status { text-align: center; font-style: italic; color: #606770; min-height: 2em; }
         #formula-display { text-align: center; font-family: 'Courier New', Courier, monospace; background-color: #f0f2f5; padding: 10px; border-radius: 4px; margin-top: 20px; }
         #model-description { text-align: center; margin-bottom: 20px; }
-        #race-map { height: 450px; width: 100%; border-radius: 8px; margin-bottom: 20px; }
+        #race-map { height: 450px; width: 100%; border-radius: 8px; margin-top: 30px; } /* Değişiklik: margin-top eklendi */
         #result-table-container { margin-top: 30px; overflow-x: auto; }
         #result-table { width: 100%; border-collapse: collapse; font-size: 14px; }
         #result-table th, #result-table td { border: 1px solid #ddd; padding: 10px; text-align: right; }
@@ -38,7 +38,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.07</h1>
+        <h1>Strava Yarış Simülatörü v1.08</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -66,6 +66,10 @@
                     <label for="target-hr">Hedef Yarış Nabzı (bpm):</label>
                     <input type="number" id="target-hr" min="80" max="220" step="1" disabled>
                     <span id="training-avg-hr-info"></span>
+                    <br>
+                    <!-- YENİ: Başlangıç Saati Girişi -->
+                    <label for="start-time">Başlangıç Saati:</label>
+                    <input type="time" id="start-time" value="07:00">
                 </div>
                 <br>
                 <button id="simulate-button">Simülasyonu Başlat</button>
@@ -75,9 +79,10 @@
         <div class="box" id="result-box" style="display: none;">
             <h2>Simülasyon Sonucu</h2>
             <h3 id="estimated-time" style="text-align:center; color: #fc4c02;"></h3>
-            <div id="race-map-container"><div id="race-map"></div></div>
             <div id="result-graph"></div>
+            <!-- DEĞİŞİKLİK: Harita ve Tablo yeri değiştirildi -->
             <div id="result-table-container"></div>
+            <div id="race-map-container" style="display:none;"><div id="race-map"></div></div>
         </div>
 
         <div id="status"></div>
@@ -87,7 +92,7 @@
     <script>
         const pythonCode = `
 import gpxpy, json, numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import plotly.graph_objects as go
 import pandas as pd
 from gpxpy.gpx import GPXWaypoint
@@ -197,7 +202,8 @@ def create_performance_model(gpx_points):
     formula_string = f"Pace (sn/km) = {a:.4f} * (Eğim%)² {b:+.4f} * (Eğim%) {c:+.2f}"
     return final_poly.coeffs.tolist(), fig.to_json(), formula_string
 
-def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_factor):
+# YENİ: start_time_str parametresi eklendi
+def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_factor, start_time_str):
     gpx = gpxpy.parse(race_gpx_string)
     if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
         gpx.smooth(vertical=True, remove_extremes=True)
@@ -205,14 +211,15 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     race_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not race_points: return "GPX dosyasında geçerli rota noktası bulunamadı.", go.Figure().to_json(), None, None
 
-    # Tüm rota noktaları için kümülatif mesafeyi önceden hesapla
+    # YENİ: Başlangıç saatini parse et
+    start_datetime = datetime.combine(date.today(), datetime.strptime(start_time_str, '%H:%M').time())
+
     point_distances_km = [0.0]
     dist = 0.0
     for i in range(1, len(race_points)):
         dist += race_points[i-1].distance_2d(race_points[i])
         point_distances_km.append(dist / 1000.0)
 
-    # Waypoint Analizi
     table_data, map_waypoint_data = [], []
     waypoint_indices = []
     process_waypoints = len(gpx.waypoints) > 2
@@ -227,14 +234,12 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 waypoint_indices.append((closest_point_index, waypoint))
         waypoint_indices.sort(key=lambda x: x[0])
 
-    # Simülasyon Değişkenleri
     perf_model = np.poly1d(poly_coeffs)
     fatigue_factor = 1.0
     total_time_sec, cumulative_dist_m, total_gain, total_loss = 0, 0, 0, 0
     segment_length = 20.0
     profile_dist_km, profile_ele, raw_pace_sec_km = [0], [race_points[0].elevation or 0], []
     
-    # Segment Analizi Değişkenleri
     last_wp_dist, last_wp_time, last_wp_gain, last_wp_loss = 0, 0, 0, 0
     last_wp_name = "Start"
     last_wp_link = f"https://www.google.com/maps?q={race_points[0].latitude},{race_points[0].longitude}"
@@ -288,6 +293,13 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             current_total_dist_km = cumulative_dist_m / 1000
             current_total_time_str = format_duration_hhmmss(total_time_sec)
             
+            # YENİ: Varış saatini hesapla
+            arrival_datetime = start_datetime + timedelta(seconds=total_time_sec)
+            day_diff = (arrival_datetime.date() - start_datetime.date()).days
+            time_of_day_str = arrival_datetime.strftime('%H:%M')
+            if day_diff > 0:
+                time_of_day_str += f" (+{day_diff}g)"
+
             table_row = {
                 "start_segment_name": last_wp_name, "end_segment_name": wp.name,
                 "start_segment_link": last_wp_link, "end_segment_link": wp_link,
@@ -296,6 +308,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 "segment_pace_str": format_pace_mmss(seg_time / (seg_dist/1000) if seg_dist > 0 else 0),
                 "total_dist_km": current_total_dist_km, "total_gain_m": total_gain, "total_loss_m": total_loss,
                 "total_time_str": current_total_time_str,
+                "time_of_day_str": time_of_day_str, # Yeni veri
                 "total_pace_str": format_pace_mmss(total_time_sec / current_total_dist_km if current_total_dist_km > 0 else 0),
             }
             table_data.append(table_row)
@@ -309,6 +322,14 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
         seg_dist, seg_time = cumulative_dist_m - last_wp_dist, total_time_sec - last_wp_time
         seg_gain, seg_loss = total_gain - last_wp_gain, total_loss - last_wp_loss
         finish_link = f"https://www.google.com/maps?q={race_points[-1].latitude},{race_points[-1].longitude}"
+        
+        # YENİ: Bitiş varış saatini hesapla
+        arrival_datetime = start_datetime + timedelta(seconds=total_time_sec)
+        day_diff = (arrival_datetime.date() - start_datetime.date()).days
+        time_of_day_str = arrival_datetime.strftime('%H:%M')
+        if day_diff > 0:
+            time_of_day_str += f" (+{day_diff}g)"
+
         table_data.append({
             "start_segment_name": last_wp_name, "end_segment_name": "Finish",
             "start_segment_link": last_wp_link, "end_segment_link": finish_link,
@@ -317,6 +338,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             "segment_pace_str": format_pace_mmss(seg_time / (seg_dist/1000) if seg_dist > 0 else 0),
             "total_dist_km": cumulative_dist_m / 1000, "total_gain_m": total_gain, "total_loss_m": total_loss,
             "total_time_str": format_duration_hhmmss(total_time_sec),
+            "time_of_day_str": time_of_day_str, # Yeni veri
             "total_pace_str": format_pace_mmss(total_time_sec / (cumulative_dist_m/1000) if cumulative_dist_m > 0 else 0),
         })
 
@@ -343,6 +365,10 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
         y_ticktext_str, y_tickvals_min = [format_pace_mmss(s) for s in y_tickvals_sec], [s/60 for s in y_tickvals_sec]
 
     fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", yaxis=dict(title="Pace (MM:SS/km)", tickvals=y_tickvals_min, ticktext=y_ticktext_str), yaxis2=dict(title="Yükseklik (m)", overlaying='y', side='right'), legend=dict(x=0.5, y=-0.2, xanchor='center', yanchor='top', orientation="h"))
+    
+    # YENİ: X ekseni aralığını yarışın toplam mesafesiyle sınırla
+    if profile_dist_km:
+        fig.update_xaxes(range=[0, profile_dist_km[-1]])
 
     table_json = json.dumps(table_data) if table_data else None
     map_data = {"route": [[p.latitude, p.longitude] for p in race_points], "waypoints": map_waypoint_data}
@@ -360,6 +386,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             const raceGpxInput = document.getElementById('race-gpx-input');
             const fatigueFactorInput = document.getElementById('fatigue-factor');
             const targetHrInput = document.getElementById('target-hr');
+            const startTimeInput = document.getElementById('start-time'); // Yeni
             const trainingAvgHrInfo = document.getElementById('training-avg-hr-info');
             const simulateButton = document.getElementById('simulate-button');
             const modelDisplayBox = document.getElementById('model-display-box');
@@ -474,7 +501,8 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 table.id = 'result-table';
                 const thead = table.createTHead();
                 const headerRow = thead.insertRow();
-                const headers = ["Segment", "Segment Süre", "Segment Pace", "Segment Mesafe", "Segment Kazanç/Kayıp", "Toplam Süre", "Toplam Pace", "Toplam Mesafe", "Toplam Kazanç/Kayıp"];
+                // YENİ: Başlık eklendi
+                const headers = ["Segment", "Segment Süre", "Segment Pace", "Segment Mesafe", "Segment Kazanç/Kayıp", "Toplam Süre", "Varış Saati", "Toplam Pace", "Toplam Mesafe", "Toplam Kazanç/Kayıp"];
                 headers.forEach(text => { const th = document.createElement('th'); th.textContent = text; headerRow.appendChild(th); });
 
                 const tbody = table.createTBody();
@@ -492,6 +520,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     tr.insertCell().textContent = `${row.segment_dist_km.toFixed(2)} km`;
                     tr.insertCell().textContent = `+${Math.round(row.segment_gain_m)}m / -${Math.round(row.segment_loss_m)}m`;
                     tr.insertCell().textContent = row.total_time_str;
+                    tr.insertCell().textContent = row.time_of_day_str; // Yeni hücre
                     tr.insertCell().textContent = row.total_pace_str;
                     tr.insertCell().textContent = `${row.total_dist_km.toFixed(2)} km`;
                     tr.insertCell().textContent = `+${Math.round(row.total_gain_m)}m / -${Math.round(row.total_loss_m)}m`;
@@ -505,6 +534,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 totalRow.insertCell().textContent = `${lastRow.total_dist_km.toFixed(2)} km`;
                 totalRow.insertCell().textContent = `+${Math.round(lastRow.total_gain_m)}m / -${Math.round(lastRow.total_loss_m)}m`;
                 totalRow.insertCell().textContent = lastRow.total_time_str;
+                totalRow.insertCell().textContent = lastRow.time_of_day_str; // Yeni hücre
                 totalRow.insertCell().textContent = lastRow.total_pace_str;
                 totalRow.insertCell().textContent = "-"; totalRow.insertCell().textContent = "-";
                 resultTableContainer.appendChild(table);
@@ -519,13 +549,14 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 }).addTo(raceMap);
 
                 const routePolyline = L.polyline(mapData.route, {color: 'blue'}).addTo(raceMap);
-                raceMap.fitBounds(routePolyline.getBounds());
+                raceMap.fitBounds(routePolyline.getBounds()); // Haritayı rotaya sığdırır
 
                 mapData.waypoints.forEach(wp => {
                     const popupContent = `
                         <b>${wp.name}</b><br>
                         Mesafe: ${wp.total_dist_km.toFixed(2)} km<br>
                         Varış Süresi: ${wp.total_time_str}<br>
+                        Varış Saati: ${wp.time_of_day_str}<br>
                         Toplam Kazanç: +${Math.round(wp.total_gain_m)}m<br>
                         Toplam Kayıp: -${Math.round(wp.total_loss_m)}m
                     `;
@@ -569,6 +600,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             simulateButton.onclick = () => {
                 const raceFile = raceGpxInput.files[0];
                 const fatigue = parseFloat(fatigueFactorInput.value);
+                const startTimeStr = startTimeInput.value; // Yeni
                 if (!raceFile) {
                     alert("Lütfen bir yarış GPX dosyası seçin."); return;
                 }
@@ -576,12 +608,11 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 if (isNaN(targetHR)) {
                     alert("Lütfen geçerli bir hedef nabız değeri girin."); return;
                 }
+                if (!startTimeStr) { // Yeni
+                    alert("Lütfen geçerli bir başlangıç saati girin."); return;
+                }
 
-                // Nabız ayar faktörünü hesapla
-                // Her 1 bpm fark için %0.7 performans değişimi.
-                // Yüksek hedef HR -> daha hızlı pace (faktör < 1)
-                // Düşük hedef HR -> daha yavaş pace (faktör > 1)
-                const hrPerformanceChangePerBPM = 0.007; // KULLANICI İSTEĞİ: %0.7'lik katsayı
+                const hrPerformanceChangePerBPM = 0.007; 
                 const hr_adjustment_factor = 1.0 - (targetHR - trainingAvgHR) * hrPerformanceChangePerBPM;
 
                 status.textContent = "Yarış simüle ediliyor...";
@@ -595,17 +626,19 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     const raceGpxContent = e.target.result;
                     try {
                         const simulateFunc = pyodide.globals.get('simulate_race');
-                        const [resultText, resultFigJson, tableDataJson, mapDataJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue, hr_adjustment_factor).toJs();
+                        // Yeni: startTimeStr parametresi eklendi
+                        const [resultText, resultFigJson, tableDataJson, mapDataJson] = simulateFunc(raceGpxContent, performanceModelCoeffs, fatigue, hr_adjustment_factor, startTimeStr).toJs();
                         
                         document.getElementById('estimated-time').textContent = resultText;
                         const resultFig = JSON.parse(resultFigJson);
                         Plotly.newPlot('result-graph', resultFig.data, resultFig.layout, {responsive: true});
                         
-                        if (mapDataJson) {
-                            renderRaceMap(JSON.parse(mapDataJson));
-                        }
                         if (tableDataJson) {
                             renderWaypointTable(JSON.parse(tableDataJson));
+                        }
+
+                        if (mapDataJson) {
+                            renderRaceMap(JSON.parse(mapDataJson));
                         }
 
                         resultBox.style.display = 'block';
