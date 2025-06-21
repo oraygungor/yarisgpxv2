@@ -20,8 +20,19 @@
         #strava-controls select, #activity-filter { padding: 10px; border-radius: 5px; border: 1px solid #ccc; margin-left: 10px; }
         #loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1s linear infinite; margin: 20px auto; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        #dashboard-container { margin-top: 20px; }
+        #dashboard-container, #waypoint-analysis-container { margin-top: 20px; }
         #status-message { text-align: center; font-style: italic; color: #555; margin-top: 15px; }
+        
+        /* Yeni Waypoint Tablosu Stilleri */
+        #waypoint-analysis-container h2 { text-align: center; color: #2c3e50; }
+        #waypoint-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.9em; }
+        #waypoint-table th, #waypoint-table td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        #waypoint-table th { background-color: #3498db; color: white; font-weight: bold; }
+        #waypoint-table tr:nth-child(even) { background-color: #f2f2f2; }
+        #waypoint-table tr:hover { background-color: #e9f5ff; }
+        #waypoint-table a { color: #2980b9; text-decoration: none; font-weight: bold; }
+        #waypoint-table a:hover { text-decoration: underline; }
+        #waypoint-table .total-row td { font-weight: bold; background-color: #ecf0f1; }
     </style>
 </head>
 <body>
@@ -31,35 +42,24 @@
         
         <div class="controls-section">
             <button id="strava-login-button" class="custom-button">Strava ile Giriş Yap</button>
-            
             <div id="strava-controls" style="display: none;">
                 <button id="load-activities-button" class="custom-button">Aktiviteleri Yükle / Yenile</button>
-                <select id="activity-filter">
-                    <option value="All">Tüm Koşular (15km+)</option>
-                    <option value="Run">Normal Koşu</option>
-                    <option value="TrailRun">Patika Koşusu</option>
-                    <option value="VirtualRun">Sanal Koşu</option>
-                </select>
-                <select id="activity-selector">
-                    <option value="">Önce aktiviteleri yükleyin...</option>
-                </select>
+                <select id="activity-filter"><option value="All">Tüm Koşular (15km+)</option><option value="Run">Normal Koşu</option><option value="TrailRun">Patika Koşusu</option><option value="VirtualRun">Sanal Koşu</option></select>
+                <select id="activity-selector"><option value="">Önce aktiviteleri yükleyin...</option></select>
                 <button id="strava-logout-button" class="custom-button logout-button">Çıkış Yap</button>
             </div>
-
             <hr style="margin: 20px 0;">
-
-            <label class="file-input-wrapper" id="file-input-label">
-                VEYA GPX Dosyası Yükle
-                <input type="file" id="gpx-file-input" accept=".gpx">
-            </label>
+            <label class="file-input-wrapper" id="file-input-label">VEYA GPX Dosyası Yükle<input type="file" id="gpx-file-input" accept=".gpx"></label>
         </div>
 
         <div id="status-message">Uygulama başlatılıyor...</div>
         <div id="loader"></div>
         <div id="dashboard-container"></div>
+        <div id="waypoint-analysis-container"></div>
     </div>
 
     <script type="text/python" id="python-code">
+# YENİ ve GÜNCELLENMİŞ PYTHON KODU
 import gpxpy
 import gpxpy.gpx
 import numpy as np
@@ -68,7 +68,6 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, timezone
 import json
 
-# Bu Python bölümünde hiçbir değişiklik yok. Önceki çalışan versiyonla aynı.
 SEGMENT_DISTANCE_METERS = 50.0
 OUTLIER_THRESHOLD_MULTIPLIER = 1.5
 MOVING_AVERAGE_WINDOW = 10 
@@ -80,6 +79,13 @@ def format_pace_from_seconds(seconds_per_km):
     minutes = int(pace_delta.total_seconds() // 60)
     seconds = int(pace_delta.total_seconds() % 60)
     return f"{minutes:02d}:{seconds:02d}"
+
+def format_duration(total_seconds):
+    if total_seconds is None or np.isnan(total_seconds): return "N/A"
+    seconds = int(total_seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 def format_performance_change(change_percent):
     if change_percent is None or np.isnan(change_percent): return "N/A", 'lightgray'
@@ -186,7 +192,76 @@ def create_comparison_dashboard(res1, res2, gpx_name):
     fig.update_layout(title_text=f"<b>Performans Karşılaştırması: İlk Yarı vs. İkinci Yarı ({gpx_name})</b>", height=total_height, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig.to_json()
 
+def analyze_waypoints(gpx, all_points):
+    if not gpx.waypoints or len(gpx.waypoints) < 2: return None
+    
+    milestone_points = [all_points[0]]
+    for waypoint in gpx.waypoints:
+        closest_point, _ = gpx.get_closest_point_and_track(waypoint)
+        if closest_point: milestone_points.append(closest_point)
+    milestone_points.append(all_points[-1])
+
+    milestone_names = ["Başlangıç"] + [wp.name or f"Waypoint {i+1}" for i, wp in enumerate(gpx.waypoints)] + ["Bitiş"]
+    milestone_coords = [{"lat": p.latitude, "lon": p.longitude} for p in milestone_points]
+
+    table_data = []
+    total_dist, total_gain, total_loss, total_time_sec = 0.0, 0.0, 0.0, 0.0
+
+    for i in range(len(milestone_points) - 1):
+        start_point = milestone_points[i]
+        end_point = milestone_points[i+1]
+        
+        start_idx = all_points.index(start_point)
+        end_idx = all_points.index(end_point)
+        
+        if start_idx >= end_idx: continue
+
+        segment_points = all_points[start_idx:end_idx + 1]
+        segment = gpxpy.gpx.GPXTrackSegment(points=segment_points)
+        
+        seg_dist_m = segment.length_3d()
+        seg_gain, seg_loss = segment.get_uphill_downhill()
+        seg_time_sec = (end_point.time - start_point.time).total_seconds() if start_point.time and end_point.time else 0
+        seg_pace_spk = (seg_time_sec / (seg_dist_m / 1000)) if seg_dist_m > 0 else 0
+
+        total_dist += seg_dist_m
+        total_gain += seg_gain
+        total_loss += seg_loss
+        total_time_sec += seg_time_sec
+        total_pace_spk = (total_time_sec / (total_dist / 1000)) if total_dist > 0 else 0
+        
+        table_data.append({
+            "segment_name": f"{milestone_names[i]} → {milestone_names[i+1]}",
+            "end_point_coords": milestone_coords[i+1],
+            "segment_dist": f"{seg_dist_m / 1000:.2f} km",
+            "segment_gain": f"{int(seg_gain)} m",
+            "segment_loss": f"{int(seg_loss)} m",
+            "time_between_cp": format_duration(seg_time_sec),
+            "pace_between_cp": f"{format_pace_from_seconds(seg_pace_spk)}/km",
+            "total_dist": f"{total_dist / 1000:.2f} km",
+            "total_time": format_duration(total_time_sec),
+            "avg_pace_total": f"{format_pace_from_seconds(total_pace_spk)}/km"
+        })
+
+    if not table_data: return None
+
+    # Toplam satırını ekle
+    overall_pace = (total_time_sec / (total_dist / 1000)) if total_dist > 0 else 0
+    table_data.append({
+        "segment_name": "Toplam",
+        "end_point_coords": None,
+        "segment_dist": f"{total_dist / 1000:.2f} km",
+        "segment_gain": f"{int(total_gain)} m",
+        "segment_loss": f"{int(total_loss)} m",
+        "time_between_cp": format_duration(total_time_sec),
+        "pace_between_cp": f"{format_pace_from_seconds(overall_pace)}/km",
+        "total_dist": "", "total_time": "", "avg_pace_total": ""
+    })
+    
+    return table_data
+
 def convert_strava_stream_to_gpx(stream_data_json, activity_name, start_time_iso):
+    # Bu fonksiyonda değişiklik yok
     stream_data = json.loads(stream_data_json)
     gpx = gpxpy.gpx.GPX(); gpx_track = gpxpy.gpx.GPXTrack(name=activity_name); gpx.tracks.append(gpx_track)
     gpx_segment = gpxpy.gpx.GPXTrackSegment(); gpx_track.segments.append(gpx_segment)
@@ -203,38 +278,54 @@ def run_analysis_from_gpx_string(gpx_string):
         gpx = gpxpy.parse(gpx_string)
     except Exception as e:
         return json.dumps({"error": f"GPX Parse Hatası: {e}"})
+
     if any(p.elevation is not None for t in gpx.tracks for s in t.segments for p in s.points):
         gpx.smooth(vertical=True, remove_extremes=True)
+
     all_points = [p for t in gpx.tracks for s in t.segments for p in s.points]
     if not all_points or not all_points[0].time:
          return json.dumps({"error": "Analiz için GPX dosyasında zaman bilgisi (time tags) bulunmalıdır."})
+    
     total_distance = gpxpy.gpx.GPXTrackSegment(all_points).length_3d()
     if total_distance is None or total_distance < 1000:
         return json.dumps({"error": "Analiz için yeterli mesafe yok (en az 1km)."})
-    split_distance = total_distance / 2
-    cumulative_distance, split_index = 0, -1
+    
+    split_distance, split_index = total_distance / 2, -1
+    cumulative_distance = 0
     for i in range(1, len(all_points)):
         dist_3d = all_points[i].distance_3d(all_points[i-1])
         if dist_3d is not None: cumulative_distance += dist_3d
         if cumulative_distance >= split_distance:
             split_index = i; break
+            
     if split_index == -1: return json.dumps({"error": "Parkur bölünemedi."})
-    first_half_points = all_points[:split_index]; second_half_points = all_points[split_index:]
+
+    first_half_points, second_half_points = all_points[:split_index], all_points[split_index:]
     activity_name = gpx.name or (gpx.tracks[0].name if gpx.tracks else "Bilinmeyen Aktivite")
     results1 = perform_full_analysis(first_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
     results2 = perform_full_analysis(second_half_points, SEGMENT_DISTANCE_METERS, OUTLIER_THRESHOLD_MULTIPLIER)
-    if results1 and results2:
-        return create_comparison_dashboard(results1, results2, activity_name)
-    else:
+    
+    if not (results1 and results2):
         return json.dumps({"error": "Koşunun bir veya iki yarısı için analiz başarısız oldu."})
-    </script>
+
+    fig_json_str = create_comparison_dashboard(results1, results2, activity_name)
+    final_data = json.loads(fig_json_str)
+    
+    # YENİ: Waypoint analizini çalıştır ve sonuçlara ekle
+    waypoint_table_data = analyze_waypoints(gpx, all_points)
+    if waypoint_table_data:
+        final_data['waypoint_analysis'] = waypoint_table_data
+        
+    return json.dumps(final_data)
+</script>
 
 
     <script>
-        // --- JAVASCRIPT PART UPDATED FOR NEW SERVER LOGIC ---
+        // YENİ ve GÜNCELLENMİŞ JAVASCRIPT KODU
         const loader = document.getElementById('loader');
         const statusMessage = document.getElementById('status-message');
         const dashboardContainer = document.getElementById('dashboard-container');
+        const waypointContainer = document.getElementById('waypoint-analysis-container');
         let pyodide = null;
         const loginButton = document.getElementById('strava-login-button');
         const logoutButton = document.getElementById('strava-logout-button');
@@ -244,31 +335,21 @@ def run_analysis_from_gpx_string(gpx_string):
         const loadActivitiesButton = document.getElementById('load-activities-button');
         const activityFilter = document.getElementById('activity-filter');
 
-        // URL'den token'ı yakalayan fonksiyon
         function handleTokenFromUrl() {
             const hash = window.location.hash;
             if (hash.includes("#access_token=")) {
                 const accessToken = hash.split('=')[1];
                 localStorage.setItem('strava_token', accessToken);
-                // URL'den token'ı temizle
                 window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
             }
         }
 
         async function fetchWithAuth(url, options = {}) {
             const token = localStorage.getItem('strava_token');
-            if (!token) {
-                handleLogout();
-                throw new Error("Giriş yapılmamış.");
-            }
-            // Sunucu artık 'Bearer' öneki beklemiyor, doğrudan token gönderiyoruz.
+            if (!token) { handleLogout(); throw new Error("Giriş yapılmamış."); }
             const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers };
             const response = await fetch(url, { ...options, headers });
-            if (response.status === 401) {
-                handleLogout();
-                statusMessage.textContent = "Oturum süreniz doldu. Lütfen yeniden giriş yapın.";
-                throw new Error("Authorization Error");
-            }
+            if (response.status === 401) { handleLogout(); statusMessage.textContent = "Oturum süreniz doldu. Lütfen yeniden giriş yapın."; throw new Error("Authorization Error"); }
             if (!response.ok) throw new Error(`API Hatası: ${response.statusText}`);
             return response.json();
         }
@@ -280,43 +361,38 @@ def run_analysis_from_gpx_string(gpx_string):
             loginButton.style.display = 'inline-block';
             activitySelector.innerHTML = '<option value="">Önce aktiviteleri yükleyin...</option>';
             dashboardContainer.innerHTML = '';
+            waypointContainer.innerHTML = '';
             statusMessage.textContent = "Çıkış yapıldı. Analiz için giriş yapın veya GPX dosyası yükleyin.";
         }
         
-     
-function filterAndPopulateActivities() {
-    const cachedActivities = JSON.parse(sessionStorage.getItem('strava_activities_cache') || '[]');
-    const filterValue = activityFilter.value;
-    
-    const filtered = cachedActivities.filter(act => {
-        const isLongEnough = act.distance >= 15000;
-        if (filterValue === 'All') return isLongEnough;
-        return isLongEnough && act.sport_type === filterValue;
-    });
+        function filterAndPopulateActivities() {
+            const cachedActivities = JSON.parse(sessionStorage.getItem('strava_activities_cache') || '[]');
+            const filterValue = activityFilter.value;
+            const filtered = cachedActivities.filter(act => {
+                const isLongEnough = act.distance >= 15000;
+                if (filterValue === 'All') return isLongEnough;
+                return isLongEnough && act.sport_type === filterValue;
+            });
+            activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
+            if (filtered.length === 0) {
+                 activitySelector.innerHTML = `<option value="">Bu filtrede koşu bulunamadı (15km+).</option>`;
+                 return;
+            }
+            filtered.forEach(act => {
+                const option = document.createElement('option');
+                option.value = act.id;
+                option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
+                option.dataset.name = act.name;
+                option.dataset.startTime = act.start_date;
+                activitySelector.appendChild(option);
+            });
+        }
 
-    activitySelector.innerHTML = '<option value="">Bir aktivite seçin...</option>';
-    if (filtered.length === 0) {
-         activitySelector.innerHTML = `<option value="">Bu filtrede koşu bulunamadı (15km+).</option>`;
-         return;
-    }
-    filtered.forEach(act => {
-        const option = document.createElement('option');
-        option.value = act.id;
-        // --- DEĞİŞİKLİK BURADA ---
-        // Artık sunucudan gelen 'name' alanını kullanıyoruz.
-        option.textContent = `(${(act.distance / 1000).toFixed(1)} km) ${act.name}`;
-        option.dataset.name = act.name; // Gerçek aktivite adını sakla
-        option.dataset.startTime = act.start_date; // Gerçek başlangıç tarihini sakla
-        // --- DEĞİŞİKLİK SONU ---
-        activitySelector.appendChild(option);
-    });
-}
         function setupLoggedInUI() {
             loginButton.style.display = 'none';
             stravaControls.style.display = 'block';
             const cachedActivities = sessionStorage.getItem('strava_activities_cache');
             if (cachedActivities) {
-                console.log("Aktiviteler önbellekten yüklendi.");
                 filterAndPopulateActivities();
                 statusMessage.textContent = "Aktiviteler önbellekten yüklendi. Listeyi yenilemek için butona tıklayın.";
             } else {
@@ -328,10 +404,9 @@ function filterAndPopulateActivities() {
             statusMessage.textContent = "Strava aktiviteleri yükleniyor...";
             loader.style.display = 'block';
             try {
-                // Sunucudaki yeni endpoint'i çağırıyoruz.
                 const activities = await fetchWithAuth('/api/get_activities');
                 sessionStorage.setItem('strava_activities_cache', JSON.stringify(activities));
-                filterAndPopulateActivities(); // Filtrele ve listele
+                filterAndPopulateActivities();
                 statusMessage.textContent = "Aktivite listesi başarıyla yüklendi ve yenilendi.";
             } catch (error) {
                 console.error("Aktiviteler yüklenemedi:", error);
@@ -350,15 +425,15 @@ function filterAndPopulateActivities() {
             statusMessage.textContent = `"${activityName}" aktivitesi için veri akışı alınıyor...`;
             loader.style.display = 'block';
             dashboardContainer.innerHTML = '';
+            waypointContainer.innerHTML = '';
             try {
-                // Sunucudaki yeni endpoint'i çağırıyoruz.
                 const allStreams = await fetchWithAuth('/api/get_activity_streams', {
                     method: 'POST',
                     body: JSON.stringify({ activity_ids: [activityId] })
                 });
                 if (!allStreams || allStreams.length === 0) throw new Error("Aktivite için veri akışı alınamadı.");
                 
-                const streamData = allStreams[0]; // İlk aktivitenin stream'ini al
+                const streamData = allStreams[0];
                 statusMessage.textContent = "Veri GPX formatına dönüştürülüyor ve analiz ediliyor...";
                 const gpxConverter = pyodide.globals.get('convert_strava_stream_to_gpx');
                 const streamDataAsJsonString = JSON.stringify(streamData);
@@ -373,17 +448,86 @@ function filterAndPopulateActivities() {
             }
         }
 
+        function renderWaypointTable(data) {
+            waypointContainer.innerHTML = ''; // Önceki tabloyu temizle
+            if (!data || data.length === 0) return;
+
+            const table = document.createElement('table');
+            table.id = 'waypoint-table';
+
+            const headerContent = `
+                <h2>Waypoint (CP) Analizi</h2>
+                <thead>
+                    <tr>
+                        <th>Segment</th>
+                        <th>Segment Mesafesi</th>
+                        <th>Segment Kazanç</th>
+                        <th>Segment Kayıp</th>
+                        <th>CP'ler Arası Süre</th>
+                        <th>CP'ler Arası Pace</th>
+                        <th>Toplam Mesafe</th>
+                        <th>Toplam Süre</th>
+                        <th>Toplam Ort. Pace</th>
+                    </tr>
+                </thead>
+            `;
+            table.innerHTML = headerContent;
+            
+            const tbody = document.createElement('tbody');
+            
+            data.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                // Son satır "Toplam" satırı ise özel stil uygula
+                if (index === data.length - 1) {
+                    tr.classList.add('total-row');
+                }
+
+                let segmentCell = `<td>${row.segment_name}</td>`;
+                if (row.end_point_coords) {
+                    const { lat, lon } = row.end_point_coords;
+                    segmentCell = `<td><a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank">${row.segment_name}</a></td>`;
+                }
+
+                tr.innerHTML = `
+                    ${segmentCell}
+                    <td>${row.segment_dist}</td>
+                    <td>${row.segment_gain}</td>
+                    <td>${row.segment_loss}</td>
+                    <td>${row.time_between_cp}</td>
+                    <td>${row.pace_between_cp}</td>
+                    <td>${row.total_dist}</td>
+                    <td>${row.total_time}</td>
+                    <td>${row.avg_pace_total}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            table.appendChild(tbody);
+            waypointContainer.appendChild(table);
+        }
+
         function runAnalysis(gpxContent) {
             try {
+                // Konteynerleri temizle
+                dashboardContainer.innerHTML = '';
+                waypointContainer.innerHTML = '';
+
                 const analysisFunc = pyodide.globals.get('run_analysis_from_gpx_string');
-                const plotlyJson = analysisFunc(gpxContent);
-                const figData = JSON.parse(plotlyJson);
-                if (figData.error) {
-                    alert("Analiz Hatası: " + figData.error);
+                const resultJson = analysisFunc(gpxContent);
+                const resultData = JSON.parse(resultJson);
+
+                if (resultData.error) {
+                    alert("Analiz Hatası: " + resultData.error);
                     statusMessage.textContent = "Hata oluştu. Lütfen başka bir dosya deneyin.";
                 } else {
-                    Plotly.newPlot('dashboard-container', figData.data, figData.layout);
+                    // Ana karşılaştırma grafiğini çiz
+                    Plotly.newPlot('dashboard-container', resultData.data, resultData.layout);
                     statusMessage.textContent = "Analiz tamamlandı.";
+
+                    // YENİ: Waypoint analizi verisi varsa tabloyu oluştur
+                    if (resultData.waypoint_analysis) {
+                        renderWaypointTable(resultData.waypoint_analysis);
+                    }
                 }
             } catch (error) {
                 console.error("Python execution error:", error);
@@ -393,6 +537,7 @@ function filterAndPopulateActivities() {
                 loader.style.display = 'none';
             }
         }
+
         async function main() {
             statusMessage.textContent = "Python ortamı yükleniyor...";
             loader.style.display = 'block';
@@ -404,9 +549,8 @@ function filterAndPopulateActivities() {
                 await micropip.install(['gpxpy', 'plotly']);
                 const pythonCode = document.getElementById('python-code').textContent;
                 pyodide.runPython(pythonCode);
-                console.log("Pyodide ve kütüphaneler hazır.");
                 
-                handleTokenFromUrl(); // URL'deki token'ı yakala
+                handleTokenFromUrl();
                 
                 loginButton.addEventListener('click', () => { window.location.href = '/login'; });
                 logoutButton.addEventListener('click', handleLogout);
@@ -418,11 +562,11 @@ function filterAndPopulateActivities() {
                     if (!file) return;
                     statusMessage.textContent = "GPX dosyası analiz ediliyor...";
                     loader.style.display = 'block';
-                    dashboardContainer.innerHTML = ''; 
                     const reader = new FileReader();
                     reader.onload = (e) => runAnalysis(e.target.result);
                     reader.readAsText(file);
                 });
+
                 if (localStorage.getItem('strava_token')) {
                     setupLoggedInUI();
                 } else {
