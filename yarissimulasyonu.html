@@ -37,7 +37,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.11</h1>
+        <h1>Strava Yarış Simülatörü v1.12 (Stabil)</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -122,36 +122,40 @@ def convert_streams_to_gpx_points(streams_json):
     return all_points
 
 def create_performance_model(gpx_points):
-    if not gpx_points or len(gpx_points) < 2: return None, "{}", "Analiz için yeterli GPX noktası bulunamadı."
+    if not gpx_points or len(gpx_points) < 2: 
+        return None, "{}", "Analiz için yeterli GPX noktası bulunamadı."
     
-    original_gpx = gpxpy.gpx.GPX()
-    track = gpxpy.gpx.GPXTrack()
-    track.segments.append(gpxpy.gpx.GPXTrackSegment(points=gpx_points))
-    original_gpx.tracks.append(track)
-    
-    smoothed_gpx = original_gpx.clone()
-    
+    # --- SAĞLAMLAŞTIRILMIŞ VERİ TEMİZLEME ---
+    # `smooth` fonksiyonu agresif olabilir. Başarısız olursa veya tüm veriyi silerse,
+    # programın çökmemesi için ham verilerle devam et (fallback).
     try:
+        gpx_to_process = gpxpy.gpx.GPX()
+        track = gpxpy.gpx.GPXTrack()
+        track.segments.append(gpxpy.gpx.GPXTrackSegment(points=gpx_points))
+        gpx_to_process.tracks.append(track)
+        
         if any(p.elevation is not None for p in gpx_points):
-            smoothed_gpx.smooth(vertical=True, remove_extremes=True)
+            gpx_to_process.smooth(vertical=True, remove_extremes=True)
+        
         # Kontrol: Düzeltme sonrası veri kaldı mı?
-        if not smoothed_gpx.tracks or not smoothed_gpx.tracks[0].segments or not smoothed_gpx.tracks[0].segments[0].points:
-            # Düzeltme başarısız olduysa, ham veriyi kullan
-            smoothed_points = gpx_points
+        if not gpx_to_process.tracks or not gpx_to_process.tracks[0].segments or not gpx_to_process.tracks[0].segments[0].points:
+            # Düzeltme başarısız olduysa (tüm veriyi sildiyse), ham veriyi kullan
+            points_for_analysis = gpx_points
         else:
-            smoothed_points = smoothed_gpx.tracks[0].segments[0].points
+            points_for_analysis = gpx_to_process.tracks[0].segments[0].points
     except Exception:
-        # Herhangi bir smooth hatasında ham veriyi kullan
-        smoothed_points = gpx_points
+        # Herhangi bir smooth hatasında da ham veriyi kullan
+        points_for_analysis = gpx_points
+    # --- SAĞLAMLAŞTIRMA SONU ---
 
-    if len(smoothed_points) < 2: return None, "{}", "GPX veri düzeltmesi sonrası analiz edilecek nokta kalmadı."
+    if len(points_for_analysis) < 2: 
+        return None, "{}", "GPX veri analizi sonrası kullanılabilir nokta kalmadı."
          
-    segments_data = []
-    segment_length = 50.0
-    segment_start_point, cumulative_distance = smoothed_points[0], 0.0
+    segments_data, segment_length = [], 50.0
+    segment_start_point, cumulative_distance = points_for_analysis[0], 0.0
     
-    for i in range(1, len(smoothed_points)):
-        prev_point, current_point = smoothed_points[i-1], smoothed_points[i]
+    for i in range(1, len(points_for_analysis)):
+        prev_point, current_point = points_for_analysis[i-1], points_for_analysis[i]
         delta_distance = current_point.distance_2d(prev_point)
         if delta_distance is None or delta_distance <= 0: continue
         cumulative_distance += delta_distance
@@ -220,7 +224,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             point_distances_km.append(dist/1000.0); point_times_sec.append(time_sec); point_gains.append(gain); point_losses.append(loss)
             continue
         ele_delta = p2.elevation - p1.elevation if p2.elevation is not None and p1.elevation is not None else 0
-        slope = (ele_delta / d) * 100
+        slope = (ele_delta / d) * 100 if d > 0 else 0
         if dist > 20000 and (dist // 20000 > (dist - d) // 20000): fatigue *= (1 + fatigue_percent / 100)
         predicted_pace = perf_model(np.clip(slope, -35, 35)) * fatigue * hr_adjustment_factor
         dist += d; time_sec += predicted_pace * (d / 1000)
