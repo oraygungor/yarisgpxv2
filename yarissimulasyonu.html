@@ -38,7 +38,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.09</h1>
+        <h1>Strava Yarış Simülatörü v1.10</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -336,15 +336,60 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             "total_pace_str": format_pace_mmss(total_time_sec / (cumulative_dist_m/1000) if cumulative_dist_m > 0 else 0),
         })
 
-    result_text = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec)}"
+   result_text = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec)}"
     pace_series = pd.Series(raw_pace_sec_km)
     moving_avg_pace_sec_km = pace_series.rolling(window=15, min_periods=1).mean().tolist()
     fig = go.Figure()
+
+    # Adım 1: Hover için gerekli tüm verileri hazırla
     formatted_avg_paces = [format_pace_mmss(p) for p in moving_avg_pace_sec_km]
-    ele_custom_data = ["-"] + formatted_avg_paces
-    pace_custom_data = np.stack((np.array(formatted_avg_paces), np.array(profile_ele[1:])), axis=-1)
-    fig.add_trace(go.Scatter(x=profile_dist_km, y=profile_ele, name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'), customdata=ele_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata}/km<extra></extra>'))
-    fig.add_trace(go.Scatter(x=profile_dist_km[1:], y=[p / 60 for p in moving_avg_pace_sec_km], name='Tahmini Ort. Pace', line=dict(color='orange'), customdata=pace_custom_data, hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Yükseklik: %{customdata[1]:.0f} m<extra></extra>'))
+    
+    # Adım 2: Hover için özel veri setlerini (customdata) oluştur
+    # Her bir profil noktası için [ortalama_pace, toplam_kazanç, toplam_kayıp] bilgilerini içerir.
+    # [1:] ile ilk elemanı (başlangıç noktası) atlıyoruz çünkü pace o noktada hesaplanmamıştır.
+    full_custom_data = np.stack((
+        np.array(formatted_avg_paces),
+        np.array(profile_gain[1:]),
+        np.array(profile_loss[1:])
+    ), axis=-1)
+
+    # Adım 3: Grafikleri yeni hover şablonları ile oluştur
+    
+    # Yükseklik Profili Grafiği (Yeşil Çizgi)
+    fig.add_trace(go.Scatter(
+        x=profile_dist_km[1:], 
+        y=profile_ele[1:], 
+        name='Yükseklik Profili', 
+        yaxis='y2', 
+        line=dict(color='darkgreen'), 
+        customdata=full_custom_data, 
+        hovertemplate=(
+            '<b>Mesafe: %{x:.2f} km</b><br>' +
+            'Yükseklik: %{y:.0f} m<br>' +
+            'Ort. Pace: %{customdata[0]}/km<br>' +
+            'Toplam Kazanç: +%{customdata[1]:.0f} m<br>' +
+            'Toplam Kayıp: -%{customdata[2]:.0f} m<extra></extra>'
+        )
+    ))
+
+    # Pace Profili Grafiği (Turuncu Çizgi)
+    fig.add_trace(go.Scatter(
+        x=profile_dist_km[1:], 
+        y=[p / 60 for p in moving_avg_pace_sec_km], 
+        name='Tahmini Ort. Pace', 
+        line=dict(color='orange'), 
+        customdata=full_custom_data, 
+        hovertemplate=(
+            '<b>Mesafe: %{x:.2f} km</b><br>' +
+            'Ort. Pace: %{customdata[0]}/km<br>' +
+            'Yükseklik: %{y:.0f} m<br>' +
+            'Toplam Kazanç: +%{customdata[1]:.0f} m<br>' +
+            'Toplam Kayıp: -%{customdata[2]:.0f} m<extra></extra>'
+        )
+    ))
+
+
+
 
     if process_waypoints:
         wp_dists_km = [point_distances_km[idx] for idx, _ in waypoint_indices]
