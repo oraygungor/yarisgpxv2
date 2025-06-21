@@ -235,6 +235,8 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     total_time_sec, cumulative_dist_m, total_gain, total_loss = 0, 0, 0, 0
     segment_length = 20.0
     profile_dist_km, profile_ele, raw_pace_sec_km = [0], [race_points[0].elevation or 0], []
+    # YENİ: Kümülatif kazanç ve kayıp listeleri
+    profile_gain, profile_loss = [0.0], [0.0]
     
     last_wp_dist, last_wp_time, last_wp_gain, last_wp_loss = 0, 0, 0, 0
     last_wp_name = "Start"
@@ -276,6 +278,9 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             profile_dist_km.append(cumulative_dist_m / 1000)
             profile_ele.append(current_point.elevation if current_point.elevation is not None else profile_ele[-1])
             raw_pace_sec_km.append(predicted_pace_sec_km)
+            # YENİ: Her adımda kümülatif kazanç/kayıp değerlerini listelere ekle
+            profile_gain.append(total_gain)
+            profile_loss.append(total_loss)
 
             segment_start_point = current_point
             cumulative_segment_dist = 0
@@ -336,25 +341,22 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             "total_pace_str": format_pace_mmss(total_time_sec / (cumulative_dist_m/1000) if cumulative_dist_m > 0 else 0),
         })
 
-   result_text = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec)}"
+    # --- YENİ GRAFİK OLUŞTURMA BÖLÜMÜ ---
+    result_text = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec)}"
     pace_series = pd.Series(raw_pace_sec_km)
     moving_avg_pace_sec_km = pace_series.rolling(window=15, min_periods=1).mean().tolist()
     fig = go.Figure()
 
-    # Adım 1: Hover için gerekli tüm verileri hazırla
     formatted_avg_paces = [format_pace_mmss(p) for p in moving_avg_pace_sec_km]
     
-    # Adım 2: Hover için özel veri setlerini (customdata) oluştur
-    # Her bir profil noktası için [ortalama_pace, toplam_kazanç, toplam_kayıp] bilgilerini içerir.
-    # [1:] ile ilk elemanı (başlangıç noktası) atlıyoruz çünkü pace o noktada hesaplanmamıştır.
+    # Hover için tüm özel verileri birleştir: [pace, kazanç, kayıp]
+    # 'profile_dist_km' ve diğer listeler 1 eleman fazla olduğu için [1:] ile hizalıyoruz
     full_custom_data = np.stack((
         np.array(formatted_avg_paces),
         np.array(profile_gain[1:]),
         np.array(profile_loss[1:])
     ), axis=-1)
 
-    # Adım 3: Grafikleri yeni hover şablonları ile oluştur
-    
     # Yükseklik Profili Grafiği (Yeşil Çizgi)
     fig.add_trace(go.Scatter(
         x=profile_dist_km[1:], 
@@ -387,9 +389,7 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
             'Toplam Kayıp: -%{customdata[2]:.0f} m<extra></extra>'
         )
     ))
-
-
-
+    # --- YENİ GRAFİK OLUŞTURMA BÖLÜMÜ SONU ---
 
     if process_waypoints:
         wp_dists_km = [point_distances_km[idx] for idx, _ in waypoint_indices]
@@ -581,7 +581,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 raceMapContainer.style.display = 'block';
                 if (raceMap) { raceMap.remove(); }
                 
-                // DÜZELTME: Daha iyi bir harita altlığı (OpenTopoMap) kullanıldı.
                 raceMap = L.map('race-map');
                 L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
                     maxZoom: 17,
@@ -602,7 +601,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     L.marker([wp.lat, wp.lon]).addTo(raceMap).bindPopup(popupContent);
                 });
 
-                // DÜZELTME: Zoom komutunun doğru çalışması için rotanın sınırları fonksiyondan döndürülüyor.
                 return routePolyline.getBounds();
             }
             
@@ -654,7 +652,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     alert("Lütfen geçerli bir başlangıç saati girin."); return;
                 }
 
-                // DÜZELTME: Katsayı 0.009 olarak güncellendi.
                 const hrPerformanceChangePerBPM = 0.009; 
                 const hr_adjustment_factor = 1.0 - (targetHR - trainingAvgHR) * hrPerformanceChangePerBPM;
 
@@ -679,7 +676,6 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                             renderWaypointTable(JSON.parse(tableDataJson));
                         }
                         
-                        // DÜZELTME: Harita oluşturulur ve rotanın sınırları alınır.
                         let raceBounds = null;
                         if (mapDataJson) {
                             raceBounds = renderRaceMap(JSON.parse(mapDataJson));
@@ -688,13 +684,10 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                         resultBox.style.display = 'block';
                         status.textContent = "Simülasyon tamamlandı.";
                         
-                        // DÜZELTME: Harita ve grafikler göründükten sonra boyutları yenilenir ve zoom yapılır.
                         setTimeout(() => {
                             Plotly.Plots.resize('result-graph');
                             if (raceMap) {
-                                // Önce haritanın boyutunu yenile
                                 raceMap.invalidateSize(); 
-                                // Sonra rotanın sınırlarına zoom yap
                                 if (raceBounds) {
                                     raceMap.fitBounds(raceBounds);
                                 }
