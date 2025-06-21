@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Strava Yarış Simülatörü v1.08</title>
+    <title>Strava Yarış Simülatörü</title>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <!-- Leaflet Harita Kütüphanesi -->
@@ -37,7 +37,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Strava Yarış Simülatörü v1.08</h1>
+        <h1>Strava Yarış Simülatörü v1.09</h1>
         
         <div class="box" id="login-box">
             <h2>Adım 1: Strava Hesabınıza Bağlanın</h2>
@@ -133,7 +133,8 @@ def create_performance_model(gpx_points):
     segments_data = []
     segment_length = 50.0
     outlier_threshold = 1.5
-    if len(gpx_points) < 2: return None, "{}", ""
+    if len(gpx_points) < 2: 
+        return None, "{}", "Yeterli GPX noktası bulunamadı."
     
     gpx_for_smoothing = gpxpy.gpx.GPX()
     track = gpxpy.gpx.GPXTrack()
@@ -143,6 +144,9 @@ def create_performance_model(gpx_points):
         gpx_for_smoothing.smooth(vertical=True, remove_extremes=True)
     
     smoothed_points = gpx_for_smoothing.tracks[0].segments[0].points
+    if not smoothed_points:
+         return None, "{}", "Veri düzeltme sonrası GPX noktası kalmadı."
+         
     segment_start_point, cumulative_distance = smoothed_points[0], 0.0
     
     for i in range(1, len(smoothed_points)):
@@ -158,7 +162,9 @@ def create_performance_model(gpx_points):
             if 120 < pace_sec_per_km < 4000:
                 segments_data.append({'slope': slope, 'pace_sec': pace_sec_per_km})
             segment_start_point, cumulative_distance = current_point, 0.0
-    if not segments_data: return None, "{}", ""
+            
+    if not segments_data: 
+        return None, "{}", "Analiz için geçerli antrenman segmenti bulunamadı."
     
     all_slopes = np.array([d['slope'] for d in segments_data])
     all_paces = np.array([d['pace_sec'] for d in segments_data])
@@ -174,6 +180,10 @@ def create_performance_model(gpx_points):
         if len(kept_indices) - len(new_kept_indices) == 0: break
         kept_indices = new_kept_indices
     
+    # HATA DÜZELTME: Eğer aykırı değer temizliğinden sonra yeterli veri kalmadıysa, model oluşturma.
+    if len(kept_indices) < 3:
+        return None, "{}", "Aykırı veriler temizlendikten sonra model oluşturmak için yeterli veri kalmadı."
+
     final_poly = np.poly1d(np.polyfit(all_slopes[kept_indices], all_paces[kept_indices], 2))
     fig = go.Figure()
     marker_slopes, marker_paces = all_slopes[kept_indices], all_paces[kept_indices]
@@ -216,7 +226,12 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     for i in range(1, len(race_points)):
         p1, p2 = race_points[i-1], race_points[i]
         d = p1.distance_2d(p2)
-        if d is None or d == 0: continue
+        if d is None or d == 0: 
+            point_distances_km.append(dist / 1000.0)
+            point_times_sec.append(time_sec)
+            point_gains.append(gain)
+            point_losses.append(loss)
+            continue
         
         ele_delta = 0
         if p2.elevation is not None and p1.elevation is not None:
@@ -309,11 +324,16 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     result_text = f"Tahmini Bitiş Süresi: {format_duration_hhmmss(total_time_sec_final)}"
     fig = go.Figure()
     
-    # Yeni customdata'ları oluştur
-    avg_paces_min_km = np.divide(point_times_sec[1:], point_distances_km[1:], out=np.zeros_like(point_times_sec[1:], dtype=float), where=np.array(point_distances_km[1:])!=0)
+    point_distances_km_np = np.array(point_distances_km[1:])
+    point_times_sec_np = np.array(point_times_sec[1:])
+    
+    with np.errstate(divide='ignore', invalid='ignore'):
+        avg_paces_min_km = np.divide(point_times_sec_np, point_distances_km_np)
+        avg_paces_min_km[np.isnan(avg_paces_min_km)] = 0
+
     hover_custom_data = np.stack((
         [format_pace_mmss(p) for p in avg_paces_min_km],
-        [format_duration_hhmmss(t) for t in point_times_sec[1:]],
+        [format_duration_hhmmss(t) for t in point_times_sec_np],
         point_gains[1:],
         point_losses[1:]
     ), axis=-1)
@@ -321,7 +341,12 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
     fig.add_trace(go.Scatter(x=point_distances_km[1:], y=[p.elevation for p in race_points[1:]], name='Yükseklik Profili', yaxis='y2', line=dict(color='darkgreen'), 
                             customdata=hover_custom_data,
                             hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Yükseklik: %{y:.0f} m<br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
-    fig.add_trace(go.Scatter(x=point_distances_km[1:], y=np.divide(point_times_sec[1:], point_distances_km[1:], out=np.zeros_like(point_times_sec[1:], dtype=float), where=np.array(point_distances_km[1:])!=0) / 60, name='Ort. Pace', line=dict(color='orange'),
+    
+    with np.errstate(divide='ignore', invalid='ignore'):
+        y_pace_values = np.divide(point_times_sec_np, point_distances_km_np) / 60
+        y_pace_values[np.isnan(y_pace_values)] = 0
+        
+    fig.add_trace(go.Scatter(x=point_distances_km[1:], y=y_pace_values.tolist(), name='Ort. Pace', line=dict(color='orange'),
                             customdata=hover_custom_data,
                             hovertemplate='<b>Mesafe: %{x:.2f} km</b><br>Ort. Pace: %{customdata[0]}/km<br>Toplam Süre: %{customdata[1]}<br>Toplam Kazanç: +%{customdata[2]:.0f}m / -%{customdata[3]:.0f}m<extra></extra>'))
     
@@ -335,9 +360,11 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
 
     y_tickvals_min, y_ticktext_str = [], []
     if avg_paces_min_km.size > 0:
-        y_min_sec, y_max_sec = int(np.min(avg_paces_min_km)//30)*30, (int(np.max(avg_paces_min_km)//30)+1)*30
-        y_tickvals_sec = np.arange(max(0, y_min_sec), y_max_sec, 30)
-        y_ticktext_str, y_tickvals_min = [format_pace_mmss(s) for s in y_tickvals_sec], [s/60 for s in y_tickvals_sec]
+        valid_paces = avg_paces_min_km[avg_paces_min_km > 0]
+        if valid_paces.size > 0:
+            y_min_sec, y_max_sec = int(np.min(valid_paces)//30)*30, (int(np.max(valid_paces)//30)+1)*30
+            y_tickvals_sec = np.arange(max(0, y_min_sec), y_max_sec, 30)
+            y_ticktext_str, y_tickvals_min = [format_pace_mmss(s) for s in y_tickvals_sec], [s/60 for s in y_tickvals_sec]
 
     fig.update_layout(title="Yarış Simülasyonu Profili", xaxis_title="Mesafe (km)", 
                       xaxis_range=[0, cumulative_dist_m_final/1000],
@@ -435,7 +462,11 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                     status.textContent = `Veriler analiz ediliyor...`;
                     const gpxPoints = pyodide.globals.get('convert_streams_to_gpx_points')(JSON.stringify(streams));
                     const [coeffs, modelFigJson, formulaString] = pyodide.globals.get('create_performance_model')(gpxPoints).toJs();
-                    if (!coeffs) throw new Error("Performans modeli oluşturulamadı.");
+                    
+                    if (!coeffs) {
+                        // Python tarafından gelen detaylı hata mesajını kullan
+                        throw new Error(formulaString || "Performans modeli oluşturulamadı. Bilinmeyen hata.");
+                    }
                     
                     performanceModelCoeffs = coeffs;
                     Plotly.newPlot('model-graph', JSON.parse(modelFigJson).data, JSON.parse(modelFigJson).layout, {responsive: true});
@@ -532,6 +563,10 @@ def simulate_race(race_gpx_string, poly_coeffs, fatigue_percent, hr_adjustment_f
                 console.error(`${context}:`, error);
                 status.textContent = `Bir hata oluştu: ${error.message}.`;
                 loader.style.display = 'none';
+                // Hata durumunda ilgili kutuları tekrar göster/gizle
+                loginBox.style.display = 'block';
+                modelDisplayBox.style.display = 'none';
+                simulationBox.style.display = 'none';
             }
 
             simulateButton.onclick = () => {
